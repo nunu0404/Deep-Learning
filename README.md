@@ -162,7 +162,7 @@ cd gap-gui-bug
 conda env create -f environment.yml
 conda activate gap-gui-bug
 python -m pip install -e .
-python -m playwright install chromium
+python -m playwright install --with-deps chromium
 ```
 
 ### pip 설치
@@ -173,7 +173,7 @@ python -m playwright install chromium
 cd gap-gui-bug
 pip install -r requirements.txt
 pip install -e .
-python -m playwright install chromium
+python -m playwright install --with-deps chromium
 ```
 
 ### 설치 확인
@@ -241,7 +241,331 @@ cd gap-gui-bug
 - `figures/`
 - `tables/`
 
-## 10. 설정 파일
+## 10. 팀 단위 실험 운영 방식
+
+이 프로젝트는 한 사람이 모든 실험을 혼자 돌리는 방식뿐 아니라, 여러 명이 역할을 나눠 병렬로 실험하는 방식도 염두에 두고 구성했습니다.
+
+가장 권장하는 운영 방식은 아래와 같습니다.
+
+1. 코드 오너 1명이 실험 코드를 정리해서 GitHub `main` 또는 별도 tag로 고정합니다.
+2. 데이터셋 생성은 1명이 한 번만 수행합니다.
+3. 생성된 데이터셋을 팀 전체가 공통으로 사용합니다.
+4. 팀원들은 같은 코드 버전과 같은 `metadata.csv`를 사용해, 맡은 모델 또는 drop rate만 실행합니다.
+5. 결과 JSON / CSV를 한곳에 모아 마지막 분석은 1명이 수행합니다.
+
+핵심은 아래 두 가지입니다.
+
+- 코드 버전은 모두 같아야 합니다.
+- 데이터셋도 모두 같아야 합니다.
+
+즉, 팀원마다 데이터셋을 따로 다시 만들지 않는 것이 중요합니다.
+
+### 10-1. 권장 역할 분담
+
+보통은 아래처럼 나누는 것이 가장 실용적입니다.
+
+- 코드 오너
+  - GitHub 저장소 관리
+  - README / 설정 파일 관리
+  - 공통 데이터셋 생성
+  - 최종 결과 취합 및 분석
+- 팀원 A
+  - 맡은 baseline 모델 실험
+- 팀원 B
+  - 맡은 baseline 모델 실험
+- 팀원 C
+  - 맡은 GAP drop-rate sweep 일부
+
+예시:
+
+- 당신: `qwen2vl` baseline + GAP `0.0~0.3`
+- 팀원1: `llava` baseline + GAP `0.4~0.6`
+- 팀원2: `internvl` baseline + GAP `0.7~0.9`
+
+### 10-2. 코드 버전 고정
+
+팀원 전원이 반드시 같은 코드 버전을 써야 합니다.
+
+가장 쉬운 방법은 실험 시작 전에 tag를 하나 만드는 것입니다.
+
+코드 오너:
+
+```bash
+git checkout main
+git pull origin main
+git tag exp-v1
+git push origin exp-v1
+```
+
+팀원:
+
+```bash
+git clone https://github.com/nunu0404/Deep-Learning.git
+cd Deep-Learning/gap-gui-bug
+git checkout exp-v1
+```
+
+이렇게 하면 “이번 실험은 `exp-v1` 기준”이라고 명확하게 고정할 수 있습니다.
+
+### 10-3. 데이터셋은 한 번만 생성
+
+데이터셋은 코드 오너 또는 지정된 1명이 생성하는 것을 권장합니다.
+
+예시:
+
+```bash
+cd gap-gui-bug
+conda activate gap-gui-bug
+export PYTHONPATH="$PWD/src:${PYTHONPATH:-}"
+export HF_HUB_DISABLE_XET=1
+
+python -m dataset.build_dataset \
+  --n_samples 5000 \
+  --samples-per-bug 500 \
+  --seed 42 \
+  --output-dir /shared/gap-gui-bug/data_v1
+```
+
+공유 대상:
+
+- `/shared/gap-gui-bug/data_v1/metadata.csv`
+- `/shared/gap-gui-bug/data_v1/screenshots/`
+- `/shared/gap-gui-bug/data_v1/html/`
+
+이후 팀원들은 모두 이 공통 데이터셋만 읽습니다.
+
+### 10-4. 팀원 공통 초기 세팅
+
+팀원들은 실험 전에 아래까지만 먼저 수행하면 됩니다.
+
+```bash
+git clone https://github.com/nunu0404/Deep-Learning.git
+cd Deep-Learning/gap-gui-bug
+git checkout exp-v1
+
+conda env create -f environment.yml
+conda activate gap-gui-bug
+python -m pip install -e .
+python -m playwright install --with-deps chromium
+
+export PYTHONPATH="$PWD/src:${PYTHONPATH:-}"
+export HF_HUB_DISABLE_XET=1
+
+pytest -q
+./scripts/run_quick_demo.sh
+```
+
+이 단계가 성공하면 해당 팀원 환경은 실험 준비가 끝난 것입니다.
+
+### 10-5. RQ별 실험 분담 예시
+
+#### RQ1. Baseline 모델 비교
+
+질문:
+
+`pruning 없이 어떤 VLM이 GUI bug를 가장 잘 탐지하는가?`
+
+필요 실험:
+
+- `qwen2vl` baseline
+- `llava` baseline
+- `internvl` baseline
+
+예시 분담:
+
+- 당신: `qwen2vl`
+- 팀원1: `llava`
+- 팀원2: `internvl`
+
+실행 예시:
+
+```bash
+python -m evaluation.evaluate_baseline \
+  --model qwen2vl \
+  --metadata-path /shared/gap-gui-bug/data_v1/metadata.csv \
+  --results-dir /shared/gap-gui-bug/results/rq1/baseline/your_name
+```
+
+```bash
+python -m evaluation.evaluate_baseline \
+  --model llava \
+  --metadata-path /shared/gap-gui-bug/data_v1/metadata.csv \
+  --results-dir /shared/gap-gui-bug/results/rq1/baseline/member1
+```
+
+```bash
+python -m evaluation.evaluate_baseline \
+  --model internvl \
+  --metadata-path /shared/gap-gui-bug/data_v1/metadata.csv \
+  --results-dir /shared/gap-gui-bug/results/rq1/baseline/member2
+```
+
+#### RQ2. GAP drop-rate 실험
+
+질문:
+
+`qwen2vl에서 토큰을 얼마나 버려도 성능이 유지되는가?`
+
+예시 분담:
+
+- 당신: `0.0,0.1,0.2,0.3`
+- 팀원1: `0.4,0.5,0.6`
+- 팀원2: `0.7,0.8,0.9`
+
+실행 예시:
+
+```bash
+python -m evaluation.evaluate_gap \
+  --model qwen2vl \
+  --metadata-csv /shared/gap-gui-bug/data_v1/metadata.csv \
+  --output-dir /shared/gap-gui-bug/results/rq2/gap/your_name \
+  --drop-rates "0.0,0.1,0.2,0.3" \
+  --alpha 0.4 \
+  --beta 0.3 \
+  --gamma 0.3
+```
+
+```bash
+python -m evaluation.evaluate_gap \
+  --model qwen2vl \
+  --metadata-csv /shared/gap-gui-bug/data_v1/metadata.csv \
+  --output-dir /shared/gap-gui-bug/results/rq2/gap/member1 \
+  --drop-rates "0.4,0.5,0.6" \
+  --alpha 0.4 \
+  --beta 0.3 \
+  --gamma 0.3
+```
+
+```bash
+python -m evaluation.evaluate_gap \
+  --model qwen2vl \
+  --metadata-csv /shared/gap-gui-bug/data_v1/metadata.csv \
+  --output-dir /shared/gap-gui-bug/results/rq2/gap/member2 \
+  --drop-rates "0.7,0.8,0.9" \
+  --alpha 0.4 \
+  --beta 0.3 \
+  --gamma 0.3
+```
+
+#### RQ3. Sensitivity 분석
+
+질문:
+
+`어떤 bug type이 pruning에 가장 민감한가?`
+
+이건 새로운 실행이 따로 필요한 실험이 아니라, RQ2에서 모인 GAP 결과를 분석 스크립트가 다시 읽어 계산하는 방식입니다.
+
+즉:
+
+- 팀원들이 RQ2 결과만 제대로 생성하면 됨
+- 최종 분석 담당 1명이 sensitivity curve를 생성
+
+#### RQ4. Ablation 실험
+
+질문:
+
+`attention / entropy / edge density 중 어떤 성분이 중요한가?`
+
+예시 분담:
+
+- 당신: full GAP `alpha=0.4 beta=0.3 gamma=0.3`
+- 팀원1: attention only `alpha=1.0 beta=0.0 gamma=0.0`
+- 팀원2: attention + entropy `alpha=0.7 beta=0.3 gamma=0.0`
+
+예시:
+
+```bash
+python -m evaluation.evaluate_gap \
+  --model qwen2vl \
+  --metadata-csv /shared/gap-gui-bug/data_v1/metadata.csv \
+  --output-dir /shared/gap-gui-bug/results/ablation/member1 \
+  --drop-rates "0.0,0.3,0.5" \
+  --alpha 1.0 \
+  --beta 0.0 \
+  --gamma 0.0
+```
+
+### 10-6. 어떤 스크립트를 팀원에게 맡겨야 하나
+
+팀 분산 실험에서는 `run_all.sh`보다 개별 명령 실행 방식을 권장합니다.
+
+이유:
+
+- `run_all.sh`는 1인 end-to-end 실행용입니다.
+- 팀 단위 분산 실행에서는 모델 또는 drop rate를 잘라서 나누는 것이 더 효율적입니다.
+- 각 팀원이 자기 역할만 정확히 수행하도록 하기 쉽습니다.
+
+즉:
+
+- 코드 오너 1명: `build_dataset.py`, 마지막 `analyze_results.py`
+- 팀원들: `evaluate_baseline.py`, `evaluate_gap.py`
+
+### 10-7. 결과물 취합 구조
+
+팀 결과는 아래처럼 모으는 것을 권장합니다.
+
+```text
+results/
+  rq1/
+    baseline/
+      your_name/
+      member1/
+      member2/
+  rq2/
+    gap/
+      your_name/
+      member1/
+      member2/
+  ablation/
+    your_name/
+    member1/
+    member2/
+```
+
+baseline에서 팀원이 제출해야 할 파일:
+
+- `*_baseline.json`
+- `*_predictions.csv`
+
+GAP에서 팀원이 제출해야 할 파일:
+
+- `qwen2vl_dr*.json`
+- `qwen2vl_dr*_predictions.csv`
+
+### 10-8. 최종 분석은 한 명이 수행
+
+결과물이 모두 모이면 마지막 분석 담당자가 한 번만 실행합니다.
+
+```bash
+python -m analysis.analyze_results \
+  --model-name qwen2vl \
+  --metadata-csv /shared/gap-gui-bug/data_v1/metadata.csv \
+  --figures-dir /shared/gap-gui-bug/final_figures \
+  --tables-dir /shared/gap-gui-bug/final_tables \
+  --baseline-glob "/shared/gap-gui-bug/results/rq1/baseline/**/*baseline.json" \
+  --gap-glob "/shared/gap-gui-bug/results/rq2/gap/**/*.json" \
+  --random-glob "/shared/gap-gui-bug/results/random/**/*.json" \
+  --fastv-glob "/shared/gap-gui-bug/results/fastv/**/*.json" \
+  --ablation-glob "/shared/gap-gui-bug/results/ablation/**/*.json" \
+  --skip-patch-viz
+```
+
+### 10-9. 팀 운영 시 가장 중요한 규칙
+
+- 팀원마다 데이터셋을 따로 만들지 말 것
+- 같은 git tag 또는 같은 commit을 사용할 것
+- 모두 같은 `metadata.csv`를 사용할 것
+- 각 팀원은 서로 다른 `results-dir`를 사용할 것
+- 결과물은 공용 저장소나 공유 스토리지에 모을 것
+- 최종 Figure / Table은 한 명이 취합해서 생성할 것
+
+### 10-10. 현재 구현 범위 기준 주의 사항
+
+- `Random drop` 생성기는 아직 자동 구현되어 있지 않습니다.
+- `FastV` 생성기도 아직 자동 구현되어 있지 않습니다.
+- 따라서 현재 팀 분산 실험은 우선 `Baseline + GAP + Ablation` 중심으로 운영하는 것이 현실적입니다.
+
+## 11. 설정 파일
 
 기본 설정은 `configs/default.yaml`에 있습니다.
 
@@ -260,7 +584,7 @@ cd gap-gui-bug
 
 설정을 바꾸고 싶다면 `configs/default.yaml`을 수정한 뒤 `run_all.sh`를 다시 실행하면 됩니다.
 
-## 11. 단계별로 직접 실행하고 싶은 경우
+## 12. 단계별로 직접 실행하고 싶은 경우
 
 자동 스크립트 대신 각 단계별로 직접 실행할 수도 있습니다.
 
@@ -373,7 +697,7 @@ python -m analysis.analyze_results \
 - `tables/main_results.tex`
 - `tables/ablation.tex`
 
-## 12. 주요 산출물 설명
+## 13. 주요 산출물 설명
 
 ### `data/metadata.csv`
 
@@ -419,7 +743,7 @@ python -m analysis.analyze_results \
 - VRAM
 - drop rate 관련 요약
 
-## 13. 테스트
+## 14. 테스트
 
 ```bash
 pytest -q
@@ -432,7 +756,7 @@ pytest -q
 - GAP pruner가 지정된 비율만큼 token을 제거하는지
 - `CLS` 토큰을 유지하는지
 
-## 14. 현재 구현 상태에서 알아둘 점
+## 15. 현재 구현 상태에서 알아둘 점
 
 이 프로젝트는 데이터 생성, baseline 평가, GAP 평가, 분석까지 전체 흐름이 실행되도록 구성되어 있습니다. 다만 아래는 미리 알고 시작하는 것이 좋습니다.
 
@@ -441,7 +765,7 @@ pytest -q
 - 분석 스크립트는 `results/random`과 `results/fastv`가 있으면 함께 읽어 그래프에 포함합니다.
 - 즉, 논문용 4-way 비교를 완전히 채우려면 해당 결과를 외부에서 추가로 준비해야 합니다.
 
-## 15. 자주 겪는 문제
+## 16. 자주 겪는 문제
 
 ### Hugging Face 다운로드가 이상하게 멈추거나 `416 Range Not Satisfiable`가 발생하는 경우
 
@@ -471,7 +795,7 @@ HF_HUB_DISABLE_XET=1 python -m evaluation.evaluate_baseline ...
 - `vLLM`은 별도 엔진 프로세스를 사용합니다.
 - 따라서 일부 측정값은 `transformers` 경로와 다르게 보일 수 있습니다.
 
-## 16. 한 번에 따라 하기
+## 17. 한 번에 따라 하기
 
 아무것도 모르는 상태에서 가장 안전한 실행 순서는 아래입니다.
 
@@ -480,7 +804,7 @@ cd gap-gui-bug
 conda env create -f environment.yml
 conda activate gap-gui-bug
 python -m pip install -e .
-python -m playwright install chromium
+python -m playwright install --with-deps chromium
 pytest -q
 ./scripts/run_quick_demo.sh
 ```
@@ -493,6 +817,6 @@ pytest -q
 
 `run_quick_demo.sh`와 `run_all.sh`는 모두 현재 단계가 무엇인지, 결과물이 어디에 저장되는지 로그로 출력하도록 구성되어 있습니다.
 
-## 17. 라이선스 / 참고
+## 18. 라이선스 / 참고
 
 이 저장소는 재현 가능한 연구용 스캐폴드 성격의 프로젝트입니다. 사용한 외부 모델과 데이터셋의 라이선스 및 사용 조건은 각 원본 저장소의 안내를 반드시 확인해야 합니다.
