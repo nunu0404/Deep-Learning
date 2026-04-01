@@ -1,0 +1,40 @@
+# 권장 conda 환경 파일
+# Python 3.11 기준으로 재현성을 맞추며, 나머지 의존성은 pip로 설치합니다.
+
+name: gap-gui-bug
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  # 현재 프로젝트는 Python 3.11에서 검증했습니다.
+  - python=3.11
+  - pip
+  - pip:
+      # 모델 / 추론
+      - torch>=2.1.0
+      - transformers>=4.40.0
+      - vllm>=0.4.0
+      - bitsandbytes>=0.43.0
+      - accelerate>=0.29.0
+
+      # 데이터셋 / 렌더링
+      - playwright>=1.44.0
+      - beautifulsoup4>=4.12.0
+      - datasets>=2.19.0
+
+      # 이미지 / 수치 계산
+      - scikit-image>=0.22.0
+      - opencv-python>=4.9.0
+      - scipy>=1.12.0
+      - pillow>=10.0.0
+
+      # 분석 / 로깅
+      - pandas>=2.2.0
+      - tqdm>=4.66.0
+      - matplotlib>=3.8.0
+      - seaborn>=0.13.0
+      - pyyaml>=6.0.1
+
+      # 테스트
+      - pytest>=8.0.0

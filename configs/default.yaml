@@ -1,0 +1,42 @@
+# 기본 실험 설정 파일
+# 이 파일만 봐도 전체 파이프라인의 기본 동작을 이해할 수 있도록 주석을 붙였습니다.
+
+dataset:
+  # 최종 생성할 총 이미지 수입니다.
+  # 현재 balanced mode 기준으로 아래 값들은 다음을 의미합니다.
+  # clean 2500장 + bug 2500장(버그 타입별 500장) = 총 5000장
+  n_samples: 5000
+
+  # balanced mode에서 버그 타입별로 만들 개수입니다.
+  # B1~B5가 있으므로 500 * 5 = 2500 bug 이미지가 생성됩니다.
+  samples_per_bug: 500
+
+  # 재현성을 위한 random seed입니다.
+  seed: 42
+
+  # 데이터 split 비율입니다.
+  # 현재 일부 실행 경로는 metadata에서 split을 유도해서 사용하지만,
+  # 실험 기준 비율은 아래 값을 문서화된 기본값으로 둡니다.
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+
+gap:
+  # GUI saliency score = alpha * attention + beta * (1 - entropy) + gamma * edge_density
+  alpha: 0.4
+  beta: 0.3
+  gamma: 0.3
+
+  # 토큰을 얼마나 버릴지에 대한 sweep 구간입니다.
+  # 0.0은 pruning 없음, 0.5는 절반 제거, 0.9는 90% 제거를 의미합니다.
+  drop_rates: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+
+  # ViT vision encoder에서 pruning hook을 적용할 레이어 인덱스입니다.
+  prune_after_layer: 2
+
+models:
+  # baseline 평가에 사용할 모델 이름들입니다.
+  # run_all.sh는 이 키 순서대로 baseline dry run과 full run을 수행합니다.
+  qwen2vl: "Qwen/Qwen2-VL-7B-Instruct-AWQ"
+  llava: "llava-hf/llava-v1.6-mistral-7b-hf"
+  internvl: "OpenGVLab/InternVL2-8B-AWQ"
