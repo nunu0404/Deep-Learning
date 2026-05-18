@@ -1,0 +1,5 @@
+{"index": 0, "sample_id": "00000", "assigned_bug_types": ["B1"], "clean_rendered": true, "rows_written": 2, "errors": [], "processed_at": "2026-04-01T02:12:12.611655+00:00"}
+{"index": 1, "sample_id": "00001", "assigned_bug_types": ["B2"], "clean_rendered": true, "rows_written": 2, "errors": [], "processed_at": "2026-04-01T02:12:14.907255+00:00"}
+{"index": 2, "sample_id": "00002", "assigned_bug_types": ["B3"], "clean_rendered": true, "rows_written": 2, "errors": [], "processed_at": "2026-04-01T02:12:17.277961+00:00"}
+{"index": 3, "sample_id": "00003", "assigned_bug_types": ["B4"], "clean_rendered": true, "rows_written": 2, "errors": [], "processed_at": "2026-04-01T02:12:19.875030+00:00"}
+{"index": 4, "sample_id": "00004", "assigned_bug_types": ["B5"], "clean_rendered": true, "rows_written": 2, "errors": [], "processed_at": "2026-04-01T02:12:22.419608+00:00"}

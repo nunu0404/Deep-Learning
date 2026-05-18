@@ -1,0 +1,20 @@
+{
+  "timestamp": "2026-04-01T02:12:22.428847+00:00",
+  "dataset": "HuggingFaceM4/WebSight",
+  "split": "train",
+  "max_samples": 5,
+  "all_bugs": false,
+  "samples_per_bug": 1,
+  "processed_samples": 5,
+  "remaining_samples": 0,
+  "counts": {
+    "total_images": 10,
+    "clean": 5,
+    "bug_total": 5,
+    "B1": 1,
+    "B2": 1,
+    "B3": 1,
+    "B4": 1,
+    "B5": 1
+  }
+}

@@ -1,0 +1,11 @@
+sample_id,image_path,label,bug_type,vss_score
+00000,demo_artifacts/data/screenshots/00000_clean.png,0,,
+00000,demo_artifacts/data/screenshots/00000_B1.png,1,B1,0.08844
+00001,demo_artifacts/data/screenshots/00001_clean.png,0,,
+00001,demo_artifacts/data/screenshots/00001_B2.png,1,B2,0.003794
+00002,demo_artifacts/data/screenshots/00002_clean.png,0,,
+00002,demo_artifacts/data/screenshots/00002_B3.png,1,B3,0.08643
+00003,demo_artifacts/data/screenshots/00003_clean.png,0,,
+00003,demo_artifacts/data/screenshots/00003_B4.png,1,B4,0.161936
+00004,demo_artifacts/data/screenshots/00004_clean.png,0,,
+00004,demo_artifacts/data/screenshots/00004_B5.png,1,B5,0.001826

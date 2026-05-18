@@ -1,0 +1,197 @@
+{
+  "model_name": "qwen2vl",
+  "model_id": "Qwen/Qwen2-VL-7B-Instruct",
+  "backend": "transformers",
+  "metadata_path": "/home/seongminju/Deep-Learning/gap-gui-bug/demo_artifacts/data/metadata.csv",
+  "results_dir": "/home/seongminju/Deep-Learning/gap-gui-bug/demo_artifacts/results/gap",
+  "split_strategy": "derived:stratified_test",
+  "dry_run": true,
+  "num_samples": 10,
+  "num_errors": 0,
+  "prompt": "You are a QA engineer reviewing a web UI screenshot.\nDoes this UI screenshot contain any visual bugs such as:\n- overlapping elements\n- text overflow outside its container\n- z-index layering errors\n- text truncation (unwanted ellipsis)\n- insufficient color contrast\n\nAnswer with ONLY: \"BUG: <bug_type>\" or \"CLEAN\"\nBug types: OVERLAP, OVERFLOW, ZINDEX, TRUNCATION, CONTRAST\n",
+  "metrics": {
+    "accuracy": 0.0,
+    "macro": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "macro_bug_only": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "per_class": {
+      "CLEAN": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "support": 5
+      },
+      "OVERLAP": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "support": 1
+      },
+      "OVERFLOW": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "support": 1
+      },
+      "ZINDEX": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "support": 1
+      },
+      "TRUNCATION": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "support": 1
+      },
+      "CONTRAST": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "support": 1
+      }
+    },
+    "per_bug_type": {
+      "OVERLAP": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "support": 1
+      },
+      "OVERFLOW": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "support": 1
+      },
+      "ZINDEX": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "support": 1
+      },
+      "TRUNCATION": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "support": 1
+      },
+      "CONTRAST": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "support": 1
+      }
+    },
+    "confusion_matrix": {
+      "true_labels": [
+        "CLEAN",
+        "OVERLAP",
+        "OVERFLOW",
+        "ZINDEX",
+        "TRUNCATION",
+        "CONTRAST"
+      ],
+      "predicted_labels": [
+        "CLEAN",
+        "OVERLAP",
+        "OVERFLOW",
+        "ZINDEX",
+        "TRUNCATION",
+        "CONTRAST",
+        "INVALID"
+      ],
+      "matrix": [
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          5
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1
+        ]
+      ]
+    }
+  },
+  "latency_ms": {
+    "mean": 1299.374663620256,
+    "p95": 1450.2774850232527
+  },
+  "vram_mb": {
+    "peak": 20305.53662109375,
+    "mean": 20305.53662109375,
+    "p95": 20305.53662109375
+  },
+  "artifacts": {
+    "predictions_csv": "/home/seongminju/Deep-Learning/gap-gui-bug/demo_artifacts/results/gap/qwen2vl_dr0.5_predictions.csv",
+    "errors_log": "/home/seongminju/Deep-Learning/gap-gui-bug/demo_artifacts/results/gap/errors.log"
+  },
+  "library_versions": {
+    "torch": "2.10.0+cu128",
+    "transformers": "4.57.6"
+  },
+  "gap": {
+    "drop_rate": 0.5,
+    "alpha": 0.4,
+    "beta": 0.3,
+    "gamma": 0.3,
+    "blank_dropped_pct_mean": 0.06371814092953523,
+    "blank_dropped_pct_p95": 0.3504497751124431,
+    "kept_tokens_mean": 2668.0,
+    "dropped_tokens_mean": 2668.0
+  }
+}

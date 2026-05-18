@@ -1,0 +1,11 @@
+sample_id,image_path,true_class,true_label,true_bug_type,predicted_class,predicted_label,predicted_bug_type,raw_output,wall_clock_latency_ms,peak_vram_mb,used_half_resolution_retry,drop_rate,num_tokens,kept_tokens,dropped_tokens,blank_dropped_pct,used_uniform_attention,error
+00000,/home/seongminju/Deep-Learning/gap-gui-bug/demo_artifacts/data/screenshots/00000_B1.png,OVERLAP,1,OVERLAP,CLEAN,0,,Clean,2508.254,20305.537,False,0.0,5336,5336,0,0.0,False,
+00000,/home/seongminju/Deep-Learning/gap-gui-bug/demo_artifacts/data/screenshots/00000_clean.png,CLEAN,0,,CLEAN,0,,Clean,1161.075,20305.537,False,0.0,5336,5336,0,0.0,False,
+00001,/home/seongminju/Deep-Learning/gap-gui-bug/demo_artifacts/data/screenshots/00001_B2.png,OVERFLOW,1,OVERFLOW,CLEAN,0,,Clean,1160.486,20305.537,False,0.0,5336,5336,0,0.0,False,
+00001,/home/seongminju/Deep-Learning/gap-gui-bug/demo_artifacts/data/screenshots/00001_clean.png,CLEAN,0,,CLEAN,0,,CLEAN,1184.926,20305.537,False,0.0,5336,5336,0,0.0,False,
+00002,/home/seongminju/Deep-Learning/gap-gui-bug/demo_artifacts/data/screenshots/00002_B3.png,ZINDEX,1,ZINDEX,CLEAN,0,,CLEAN,1192.643,20305.537,False,0.0,5336,5336,0,0.0,False,
+00002,/home/seongminju/Deep-Learning/gap-gui-bug/demo_artifacts/data/screenshots/00002_clean.png,CLEAN,0,,CLEAN,0,,CLEAN,1177.935,20305.537,False,0.0,5336,5336,0,0.0,False,
+00003,/home/seongminju/Deep-Learning/gap-gui-bug/demo_artifacts/data/screenshots/00003_B4.png,TRUNCATION,1,TRUNCATION,CLEAN,0,,CLEAN,1167.47,20305.537,False,0.0,5336,5336,0,0.0,False,
+00003,/home/seongminju/Deep-Learning/gap-gui-bug/demo_artifacts/data/screenshots/00003_clean.png,CLEAN,0,,CLEAN,0,,CLEAN,1162.222,20305.537,False,0.0,5336,5336,0,0.0,False,
+00004,/home/seongminju/Deep-Learning/gap-gui-bug/demo_artifacts/data/screenshots/00004_B5.png,CONTRAST,1,CONTRAST,CLEAN,0,,Clean,1139.88,20305.537,False,0.0,5336,5336,0,0.0,False,
+00004,/home/seongminju/Deep-Learning/gap-gui-bug/demo_artifacts/data/screenshots/00004_clean.png,CLEAN,0,,CLEAN,0,,Clean,1202.977,20305.537,False,0.0,5336,5336,0,0.0,False,

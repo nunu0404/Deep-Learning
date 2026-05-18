@@ -1,0 +1,15 @@
+sample_id,image_path,true_class,true_label,true_bug_type,predicted_class,predicted_label,predicted_bug_type,raw_output,wall_clock_latency_ms,peak_vram_mb,used_half_resolution_retry,drop_rate,num_tokens,kept_tokens,dropped_tokens,blank_dropped_pct,used_uniform_attention,error
+00000,/home/seongminju/Deep-Learning/gap-gui-bug/demo_artifacts/data/screenshots/00000_B1.png,OVERLAP,1,OVERLAP,INVALID,-1,,"of the
+LETTLESTEDTLETTLE Z of the",1438.453,20305.537,False,0.5,5336,2668,2668,0.0,False,
+00000,/home/seongminju/Deep-Learning/gap-gui-bug/demo_artifacts/data/screenshots/00000_clean.png,CLEAN,0,,INVALID,-1,,".lastIndexOf the
+LETTLESTATEMPAN, ""O of the",1439.363,20305.537,False,0.5,5336,2668,2668,0.0,False,
+00001,/home/seongminju/Deep-Learning/gap-gui-bug/demo_artifacts/data/screenshots/00001_B2.png,OVERFLOW,1,OVERFLOW,INVALID,-1,,,1139.64,20305.537,False,0.5,5336,2668,2668,0.0,False,
+00001,/home/seongminju/Deep-Learning/gap-gui-bug/demo_artifacts/data/screenshots/00001_clean.png,CLEAN,0,,INVALID,-1,,,1115.385,20305.537,False,0.5,5336,2668,2668,0.0,False,
+00002,/home/seongminju/Deep-Learning/gap-gui-bug/demo_artifacts/data/screenshots/00002_B3.png,ZINDEX,1,ZINDEX,INVALID,-1,,,1105.54,20305.537,False,0.5,5336,2668,2668,0.0,False,
+00002,/home/seongminju/Deep-Learning/gap-gui-bug/demo_artifacts/data/screenshots/00002_clean.png,CLEAN,0,,INVALID,-1,,"At
+At Consulting Firm, we are are
+ the unique needs of each client",1343.07,20305.537,False,0.5,5336,2668,2668,0.0,False,
+00003,/home/seongminju/Deep-Learning/gap-gui-bug/demo_artifacts/data/screenshots/00003_B4.png,TRUNCATION,1,TRUNCATION,INVALID,-1,,Assistant,1180.919,20305.537,False,0.5,5336,2668,2668,0.637,False,
+00003,/home/seongminju/Deep-Learning/gap-gui-bug/demo_artifacts/data/screenshots/00003_clean.png,CLEAN,0,,INVALID,-1,,"The image contains the following text: "" text, outside of the, text,",1338.962,20305.537,False,0.5,5336,2668,2668,0.0,False,
+00004,/home/seongminju/Deep-Learning/gap-gui-bug/demo_artifacts/data/screenshots/00004_B5.png,CONTRAST,1,CONTRAST,INVALID,-1,,of the of the last letter of the the last letter of the the of the,1459.207,20305.537,False,0.5,5336,2668,2668,0.0,False,
+00004,/home/seongminju/Deep-Learning/gap-gui-bug/demo_artifacts/data/screenshots/00004_clean.png,CLEAN,0,,INVALID,-1,,of theCOURSELISTINGING ofCOURSELISTINGingCC,1433.206,20305.537,False,0.5,5336,2668,2668,0.0,False,
