@@ -10,3 +10,4 @@ figures/
 tables/
 .env
 .DS_Store
+.github/workflows/
