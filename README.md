@@ -950,7 +950,7 @@ HF_HUB_DISABLE_XET=1 python -m analysis.hyperparam_search \
   - `0 = clean`
   - `1 = bug`
 - `bug_type`
-  - `None` 또는 `B1~B5`
+  - `None` 또는 `B1~B4`
 - `vss_score`
 
 ### `results/*_predictions.csv`
