@@ -191,6 +191,7 @@ class GAPPruner:
     def _locate_vision_stack(self, model: Any) -> tuple[Any, Any, str]:
         candidates = [
             ("visual", "blocks", "qwen2_flat"),
+            ("model.visual", "blocks", "qwen2_flat"),  # transformers 5.x Qwen2-VL
             ("vision_tower.vision_model", "encoder.layers", "generic_cls"),
             ("vision_model", "encoder.layers", "generic_cls"),
         ]
@@ -395,8 +396,9 @@ class GAPPruner:
 
     def get_tokens_to_keep(self, image: Image.Image, num_tokens: int) -> list[int]:
         """
-        Returns indices of top-(1-drop_rate)*num_tokens patches by GUI_SS score.
-        These are the patches to KEEP.
+        Returns indices of patches to KEEP, grouped by spatial_merge_size to
+        preserve PatchMerger's 2x2 grouping. Group-level GUI saliency score
+        is computed by averaging across 4 tokens per group.
         """
         if num_tokens <= 0:
             self.last_pruning_info = {
@@ -417,17 +419,71 @@ class GAPPruner:
             + self.gamma * edge_density
         ).astype(np.float32)
 
-        dropped_count = min(num_tokens, int(math.floor(num_tokens * self.drop_rate)))
-        keep_count = max(1, num_tokens - dropped_count)
-        ranked_indices = np.argsort(-gui_scores, kind="mergesort")
-        selected = ranked_indices[:keep_count]
-        keep_indices = np.sort(selected).astype(int).tolist()
+        # ---- Spatial-group-aware selection ----
+        # Qwen2-VL's PatchMerger groups 2x2=4 adjacent tokens into one.
+        # We must keep/drop tokens in spatial groups to preserve merge consistency.
+        merge = max(1, int(self.spatial_merge_size))
+        grid = self.current_grid_thw
 
-        drop_mask = np.ones((num_tokens,), dtype=bool)
-        drop_mask[selected] = False
-        drop_indices = np.nonzero(drop_mask)[0].astype(int).tolist()
-        blank_dropped = int(np.sum(entropy[drop_indices] < 0.1)) if drop_indices else 0
-        blank_dropped_pct = (100.0 * blank_dropped / len(drop_indices)) if drop_indices else 0.0
+        use_grouped = False
+        if grid is not None and merge >= 2:
+            grid_t, grid_h, grid_w = grid
+            if grid_h % merge == 0 and grid_w % merge == 0 and grid_t * grid_h * grid_w == num_tokens:
+                use_grouped = True
+
+        if use_grouped:
+            n_gh = grid_h // merge
+            n_gw = grid_w // merge
+            n_groups = grid_t * n_gh * n_gw
+
+            # Reshape scores to (T, H, W) then aggregate into (T, n_gh, n_gw)
+            scores_3d = gui_scores.reshape(grid_t, grid_h, grid_w)
+            entropy_3d = entropy.reshape(grid_t, grid_h, grid_w)
+            # Group-average via reshape: (T, n_gh, merge, n_gw, merge) -> mean over merge dims
+            group_scores = scores_3d.reshape(grid_t, n_gh, merge, n_gw, merge).mean(axis=(2, 4))
+            group_entropy = entropy_3d.reshape(grid_t, n_gh, merge, n_gw, merge).mean(axis=(2, 4))
+
+            group_scores_flat = group_scores.reshape(-1)
+            keep_n_groups = max(1, int(round(n_groups * (1.0 - self.drop_rate))))
+            keep_n_groups = min(keep_n_groups, n_groups)
+            tie_break_rng = np.random.default_rng(seed=hash(("gap_grouped_tie", n_groups)) & 0xFFFFFFFF)
+            tie_noise = tie_break_rng.uniform(-1e-6, 1e-6, size=group_scores_flat.shape).astype(np.float32)
+            top_g = np.argsort(-(group_scores_flat + tie_noise), kind="mergesort")[:keep_n_groups]
+
+            # Expand selected groups back to token indices
+            keep_set = set()
+            for g in top_g:
+                t = g // (n_gh * n_gw)
+                rem = g % (n_gh * n_gw)
+                gy = rem // n_gw
+                gx = rem % n_gw
+                for dy in range(merge):
+                    for dx in range(merge):
+                        y = gy * merge + dy
+                        x = gx * merge + dx
+                        idx = t * grid_h * grid_w + y * grid_w + x
+                        keep_set.add(int(idx))
+
+            keep_indices = sorted(keep_set)
+            drop_indices = [i for i in range(num_tokens) if i not in keep_set]
+            blank_dropped = int(np.sum(entropy[drop_indices] < 0.1)) if drop_indices else 0
+            blank_dropped_pct = (100.0 * blank_dropped / len(drop_indices)) if drop_indices else 0.0
+            mode_tag = f"grouped(merge={merge})"
+        else:
+            # Fallback: per-token selection (with random tie-breaking)
+            dropped_count = min(num_tokens, int(math.floor(num_tokens * self.drop_rate)))
+            keep_count = max(1, num_tokens - dropped_count)
+            tie_break_rng = np.random.default_rng(seed=hash(("gap_tie", num_tokens)) & 0xFFFFFFFF)
+            tie_noise = tie_break_rng.uniform(-1e-6, 1e-6, size=gui_scores.shape).astype(np.float32)
+            ranked_indices = np.argsort(-(gui_scores + tie_noise), kind="mergesort")
+            selected = ranked_indices[:keep_count]
+            keep_indices = np.sort(selected).astype(int).tolist()
+            drop_mask = np.ones((num_tokens,), dtype=bool)
+            drop_mask[selected] = False
+            drop_indices = np.nonzero(drop_mask)[0].astype(int).tolist()
+            blank_dropped = int(np.sum(entropy[drop_indices] < 0.1)) if drop_indices else 0
+            blank_dropped_pct = (100.0 * blank_dropped / len(drop_indices)) if drop_indices else 0.0
+            mode_tag = "per-token"
 
         self.last_pruning_info = {
             "num_tokens": int(num_tokens),
@@ -442,11 +498,13 @@ class GAPPruner:
             "attention": attention,
             "gui_scores": gui_scores,
             "used_uniform_attention": bool(self._used_uniform_attention),
+            "selection_mode": mode_tag,
         }
 
         self.logger.info(
-            "GAP drop_rate=%.2f | kept=%d/%d | dropped_blank=%.1f%% (%d/%d) | attention=%s",
+            "GAP drop_rate=%.2f | mode=%s | kept=%d/%d | dropped_blank=%.1f%% (%d/%d) | attention=%s",
             self.drop_rate,
+            mode_tag,
             len(keep_indices),
             num_tokens,
             blank_dropped_pct,
