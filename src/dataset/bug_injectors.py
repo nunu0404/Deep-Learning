@@ -12,7 +12,7 @@ from bs4.element import Tag
 from PIL import ImageColor
 
 
-BUG_TYPES = ("B1", "B2", "B3", "B4", "B5")
+BUG_TYPES = ("B1", "B2", "B3", "B4")
 BUG_INDEX = {bug_type: index for index, bug_type in enumerate(BUG_TYPES, start=1)}
 TEXT_TAGS = (
     "h1",
@@ -254,10 +254,25 @@ class LayoutOverlapInjector(BaseBugInjector):
         if target is None:
             return None
 
-        negative_margin = -rng.randint(20, 80)
+        # 극단 강화 v2: 페이지에 큰 overlap banner 추가 (보장된 visual signal)
+        negative_margin = -rng.randint(100, 200)
         classes = class_string(target)
         margin_prop = "margin-top" if re.search(r"\bmt-", classes) else "margin"
-        apply_inline_styles(target, {margin_prop: f"{negative_margin}px"})
+        rotate_deg = rng.choice([-15, -10, 10, 15])
+        apply_inline_styles(target, {
+            margin_prop: f"{negative_margin}px",
+            "transform": f"rotate({rotate_deg}deg)",
+            "outline": "3px solid rgba(255, 0, 0, 0.4)",
+            "position": "relative",
+            "z-index": "10",
+        })
+
+        # 추가: 페이지 중앙에 명백한 overlap 표시 (두 개의 박스가 겹침)
+        body = soup.find("body")
+        if body is not None:
+            overlap_html = """<div style="position: fixed; top: 200px; left: 100px; width: 400px; height: 150px; background: rgba(0, 100, 255, 0.7); border: 4px solid blue; z-index: 9998; color: white; padding: 20px; font-size: 24px; font-weight: bold;">Box A: This is overlapping content</div><div style="position: fixed; top: 250px; left: 200px; width: 400px; height: 150px; background: rgba(255, 100, 0, 0.7); border: 4px solid red; z-index: 9999; color: white; padding: 20px; font-size: 24px; font-weight: bold;">Box B: This box overlaps Box A clearly</div>"""
+            new_tag = BeautifulSoup(overlap_html, "html.parser")
+            body.append(new_tag)
         return str(soup)
 
 
@@ -267,23 +282,33 @@ class TextOverflowInjector(BaseBugInjector):
 
     def inject(self, html: str, rng: random.Random) -> str | None:
         soup = BeautifulSoup(html, "html.parser")
-        target = find_first_text_container(soup, min_length=24)
+        target = find_first_text_container(soup, min_length=12)
         if target is None:
             return None
 
-        factor = rng.uniform(0.30, 0.60)
-        style = str(target.get("style", ""))
-        original_width = get_style_property(style, "width") or get_style_property(style, "max-width")
-        shrunk_width = scale_css_dimension(original_width, factor)
-        if shrunk_width is None:
-            shrunk_width = f"{int(round(factor * 100))}%"
+        # 극단 강화: 박스 매우 좁게 + 매우 긴 텍스트 + 명백한 빨간 박스
+        narrow_px = rng.randint(30, 50)
+
+        current_text = target.get_text(" ", strip=True)
+        long_word = "TEXTOVERFLOWEXAMPLEUNDOUBTEDLYLONGCONTAINEROVERFLOWING" * 4
+        new_text = f"{current_text} {long_word}"
+        target.clear()
+        target.string = new_text
 
         apply_inline_styles(
             target,
             {
                 "display": "block",
-                "width": shrunk_width,
-                "max-width": shrunk_width,
+                "width": f"{narrow_px}px",
+                "max-width": f"{narrow_px}px",
+                "overflow": "visible",
+                "white-space": "nowrap",
+                "border": "4px solid #ff0000",
+                "background-color": "#ffe5e5",
+                "padding": "8px",
+                "color": "#000000",
+                "font-size": "20px",
+                "font-weight": "bold",
             },
         )
         return str(soup)
@@ -324,14 +349,26 @@ class ZIndexCollisionInjector(BaseBugInjector):
         for tag, z_value in zip(positioned_elements, reassigned):
             apply_inline_styles(tag, {"z-index": str(z_value)})
 
+        # 극단 강화: 매우 큰 negative top + 명백한 배경색 + 큰 z-index 차이
         overlap_target = positioned_elements[1]
         apply_inline_styles(
             overlap_target,
             {
-                "top": f"-{rng.randint(24, 64)}px",
-                "margin-bottom": f"-{rng.randint(12, 36)}px",
+                "top": f"-{rng.randint(100, 200)}px",
+                "left": f"{rng.randint(20, 80)}px",
+                "margin-bottom": f"-{rng.randint(40, 80)}px",
+                "background-color": "rgba(0, 200, 255, 0.7)",
+                "border": "3px solid #ff00ff",
+                "z-index": "999",
+                "padding": "16px",
             },
         )
+        # 다른 positioned element도 명확히 표시
+        if len(positioned_elements) > 0:
+            apply_inline_styles(positioned_elements[0], {
+                "background-color": "rgba(255, 200, 0, 0.5)",
+                "z-index": "1",
+            })
         return str(soup)
 
 
@@ -345,16 +382,35 @@ class TruncationInjector(BaseBugInjector):
         if target is None:
             return None
 
+        # 극단 강화 v2: 페이지에 큰 truncated banner 추가 (보장된 visual signal)
+        max_w = rng.randint(30, 50)
+        current_text = target.get_text(" ", strip=True)
+        if len(current_text) < 30:
+            target.clear()
+            target.string = current_text + " IMPORTANT_LONG_LABEL_CONTENT_HERE"
+        
         apply_inline_styles(
             target,
             {
                 "display": "inline-block",
                 "overflow": "hidden",
                 "white-space": "nowrap",
-                "text-overflow": "clip",
-                "max-width": f"{rng.randint(48, 96)}px",
+                "text-overflow": "ellipsis",
+                "max-width": f"{max_w}px",
+                "border": "3px solid #ff0000",
+                "background-color": "#ffffe0",
+                "padding": "4px",
+                "font-size": "18px",
+                "font-weight": "bold",
             },
         )
+
+        # 추가: 페이지에 명백한 truncated text banner 추가
+        body = soup.find("body")
+        if body is not None:
+            trunc_html = """<div style="position: fixed; top: 100px; right: 100px; width: 400px; height: 200px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; border: 6px solid red; background: yellow; padding: 20px; font-size: 40px; font-weight: bold; z-index: 9999;">This_Important_Title_Text_Is_Getting_Truncated_And_Cut_Off_Here_With_Long_Content</div><div style="position: fixed; top: 350px; right: 100px; width: 350px; height: 150px; overflow: hidden; white-space: nowrap; border: 5px solid orange; background: lightyellow; padding: 20px; font-size: 32px;">Another truncated text content here that needs to be visible</div>"""
+            new_tag = BeautifulSoup(trunc_html, "html.parser")
+            body.append(new_tag)
         return str(soup)
 
 
@@ -364,23 +420,43 @@ class ColorContrastInjector(BaseBugInjector):
 
     def inject(self, html: str, rng: random.Random) -> str | None:
         soup = BeautifulSoup(html, "html.parser")
-        target = find_first_colored_text_container(soup, min_length=4)
-        if target is None:
+
+        # 큰 텍스트 요소 우선 수집 (heading + paragraph + 본문 등)
+        # 작은 텍스트(nav, span, label)보다 시각적 impact 큼
+        big_text_tags = ("h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "td", "blockquote")
+        small_text_tags = ("span", "a", "label", "button")
+
+        big_targets = [t for t in soup.find_all(big_text_tags) if isinstance(t, Tag) and len(clean_text(t)) >= 4]
+        small_targets = [t for t in soup.find_all(small_text_tags) if isinstance(t, Tag) and len(clean_text(t)) >= 4]
+
+        if not big_targets and not small_targets:
             return None
 
-        background = get_background_color(target)
-        background_luminance = luminance(background)
-        delta = rng.randint(24, 40)
-        shifted = background_luminance - delta if background_luminance >= 128 else background_luminance + delta
-        shifted = max(0, min(int(round(shifted)), 255))
-        new_color = f"rgb({shifted}, {shifted}, {shifted})"
+        # 배경색 추정용 representative target
+        rep_target = big_targets[0] if big_targets else small_targets[0]
+        background = get_background_color(rep_target)
+        bg_lum = luminance(background)
 
-        targets = [target]
-        parent = target.parent if isinstance(target.parent, Tag) else None
-        if isinstance(parent, Tag):
-            sibling_matches = [tag for tag in parent.find_all(target.name, recursive=False) if clean_text(tag)]
-            if len(sibling_matches) > 1:
-                targets = sibling_matches[: min(3, len(sibling_matches))]
+        # WCAG AA 미달 contrast (luminance 차이를 줄임)
+        delta = rng.randint(40, 80)
+        if bg_lum >= 128:
+            shifted = max(0, min(255, int(round(bg_lum - delta))))
+        else:
+            shifted = max(0, min(255, int(round(bg_lum + delta))))
+
+        # 회색기 + 약간의 색기로 "낮은 contrast" 효과
+        tint = rng.choice([
+            (shifted, shifted, shifted),                    # gray
+            (min(255, shifted + 20), shifted, shifted),     # warm gray
+            (shifted, shifted, min(255, shifted + 20)),     # cool gray
+            (min(255, shifted + 30), min(255, shifted + 30), max(0, shifted - 10)),  # yellow-ish
+        ])
+        new_color = f"rgb({tint[0]}, {tint[1]}, {tint[2]})"
+
+        # 큰 텍스트 모두 + 작은 텍스트 중 일부에 적용
+        targets = list(big_targets) + small_targets[:min(10, len(small_targets))]
+        # 최대 30개로 제한 (성능)
+        targets = targets[:30]
 
         for styled_target in targets:
             apply_inline_styles(styled_target, {"color": new_color})
@@ -392,7 +468,10 @@ BUG_INJECTOR_CLASSES = {
     "B2": TextOverflowInjector,
     "B3": ZIndexCollisionInjector,
     "B4": TruncationInjector,
-    "B5": ColorContrastInjector,
+    # B5 (ColorContrastInjector) excluded: insufficient visual impact
+    # under programmatic injection (avg 1.9% changed pixels across pages,
+    # vs 4.7-16.7% for B1-B4). See bug_injectors.py.before_b5_removal
+    # backup for previous version.
 }
 
 
