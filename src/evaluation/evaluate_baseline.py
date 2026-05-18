@@ -34,13 +34,12 @@ Does this UI screenshot contain any visual bugs such as:
 - text overflow outside its container
 - z-index layering errors
 - text truncation (unwanted ellipsis)
-- insufficient color contrast
 
 Answer with ONLY: "BUG: <bug_type>" or "CLEAN"
-Bug types: OVERLAP, OVERFLOW, ZINDEX, TRUNCATION, CONTRAST
+Bug types: OVERLAP, OVERFLOW, ZINDEX, TRUNCATION
 """
 
-LABELS = ["CLEAN", "OVERLAP", "OVERFLOW", "ZINDEX", "TRUNCATION", "CONTRAST"]
+LABELS = ["CLEAN", "OVERLAP", "OVERFLOW", "ZINDEX", "TRUNCATION"]
 BUG_LABELS = LABELS[1:]
 BUG_TYPE_MAP = {
     None: "CLEAN",
@@ -50,7 +49,6 @@ BUG_TYPE_MAP = {
     "B2": "OVERFLOW",
     "B3": "ZINDEX",
     "B4": "TRUNCATION",
-    "B5": "CONTRAST",
 }
 MODEL_SPECS = {
     "qwen2vl": {

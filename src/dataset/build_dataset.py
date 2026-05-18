@@ -43,7 +43,7 @@ except ImportError:  # pragma: no cover - script execution fallback
     from dataset.bug_injectors import bug_injector_callables
 
 
-BUG_TYPES = ("B1", "B2", "B3", "B4", "B5")
+BUG_TYPES = ("B1", "B2", "B3", "B4")
 BUG_INDEX = {bug_type: index for index, bug_type in enumerate(BUG_TYPES, start=1)}
 DEFAULT_VIEWPORTS = "375x667,768x1024,1280x800"
 DEFAULT_LEGACY_VIEWPORT = "1280x800"
