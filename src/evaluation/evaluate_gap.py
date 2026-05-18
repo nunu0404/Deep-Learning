@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 
+from evaluation.splits import SPLIT_CHOICES
 from models.gap_pruning import evaluate_gap, parse_drop_rates
 
 
@@ -18,6 +19,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--metadata-csv", type=Path, default=Path("data/metadata.csv"))
     parser.add_argument("--output-dir", type=Path, default=Path("results/gap"))
     parser.add_argument("--drop-rates", default="0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9")
+    parser.add_argument("--split", choices=SPLIT_CHOICES, default="test")
+    parser.add_argument("--splits-path", type=Path)
+    parser.add_argument("--budget-images", type=int)
     parser.add_argument("--test-size", type=int, default=750)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-new-tokens", type=int, default=16)
@@ -40,6 +44,9 @@ def main() -> None:
         output_dir=str(args.output_dir),
         test_size=args.test_size,
         seed=args.seed,
+        split=args.split,
+        splits_path=args.splits_path,
+        budget_images=args.budget_images,
         dry_run=args.dry_run,
         max_new_tokens=args.max_new_tokens,
         alpha=args.alpha,

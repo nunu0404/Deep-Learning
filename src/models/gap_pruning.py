@@ -23,6 +23,7 @@ from tqdm import tqdm
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
 try:
+    from evaluation.splits import SPLIT_CHOICES, apply_budget, default_splits_path, select_split_dataframe
     from evaluation.evaluate_baseline import (
         BaseBackend,
         PROMPT,
@@ -33,8 +34,9 @@ try:
         percentile,
         safe_mean,
         run_inference_with_retry,
-    )
+)
 except ImportError:  # pragma: no cover - package-relative execution fallback
+    from ..evaluation.splits import SPLIT_CHOICES, apply_budget, default_splits_path, select_split_dataframe
     from ..evaluation.evaluate_baseline import (
         BaseBackend,
         PROMPT,
@@ -901,6 +903,8 @@ def evaluate_single_drop_rate(
             prediction_rows.append(
                 {
                     "sample_id": row.sample_id,
+                    "source_interface_id": row.source_interface_id,
+                    "viewport": row.viewport,
                     "image_path": row.image_path,
                     "true_class": row.true_class,
                     "true_label": int(row.true_label),
@@ -978,6 +982,9 @@ def evaluate_gap(
     output_dir="results/gap/",
     test_size: int = 750,
     seed: int = 42,
+    split: str = "test",
+    splits_path: str | Path | None = None,
+    budget_images: int | None = None,
     dry_run: bool = False,
     max_new_tokens: int = 16,
     alpha: float = 0.4,
@@ -1000,7 +1007,18 @@ def evaluate_gap(
     logger = setup_gap_logging(results_dir)
 
     metadata = load_metadata(metadata_path)
-    dataset, split_strategy = build_test_split(metadata, test_size=test_size, seed=seed)
+    if split in SPLIT_CHOICES:
+        dataset, split_strategy = select_split_dataframe(
+            dataframe=metadata,
+            split=split,
+            splits_path=Path(splits_path) if splits_path is not None else default_splits_path(metadata_path),
+            seed=seed,
+        )
+        dataset = apply_budget(dataset, budget_images=budget_images, seed=seed)
+        if budget_images is None and split != "all" and len(dataset) > test_size:
+            dataset = dataset.head(test_size).copy()
+    else:
+        dataset, split_strategy = build_test_split(metadata, test_size=test_size, seed=seed)
     if dry_run:
         dataset = dataset.head(10).copy()
 
@@ -1109,6 +1127,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=Path("results/gap"))
     parser.add_argument("--drop-rates", default=",".join(format_drop_rate(rate) for rate in DEFAULT_DROP_RATES))
     parser.add_argument("--drop-rate", type=float, default=0.5, help="Single-image test drop rate.")
+    parser.add_argument("--split", choices=SPLIT_CHOICES, default="test")
+    parser.add_argument("--splits-path", type=Path)
+    parser.add_argument("--budget-images", type=int)
     parser.add_argument("--test-size", type=int, default=750)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-new-tokens", type=int, default=16)
@@ -1151,8 +1172,11 @@ def main() -> None:
         output_dir=str(args.output_dir),
         test_size=args.test_size,
         seed=args.seed,
-        dry_run=args.dry_run,
-        max_new_tokens=args.max_new_tokens,
+            dry_run=args.dry_run,
+            split=args.split,
+            splits_path=args.splits_path,
+            budget_images=args.budget_images,
+            max_new_tokens=args.max_new_tokens,
         alpha=args.alpha,
         beta=args.beta,
         gamma=args.gamma,

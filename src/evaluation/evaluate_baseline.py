@@ -7,6 +7,7 @@ import argparse
 import json
 import logging
 import os
+import random
 import re
 import statistics
 import time
@@ -17,6 +18,11 @@ from typing import Any
 import pandas as pd
 from PIL import Image
 from tqdm import tqdm
+
+try:
+    from evaluation.splits import SPLIT_CHOICES, default_splits_path, select_split_dataframe
+except ImportError:  # pragma: no cover - package-relative execution fallback
+    from .splits import SPLIT_CHOICES, default_splits_path, select_split_dataframe
 
 # Avoid Xet-based partial fetch issues on some HF mirrors.
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
@@ -83,10 +89,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", choices=sorted(MODEL_SPECS), required=True)
     parser.add_argument("--metadata-path", type=Path, default=Path("data/metadata.csv"))
     parser.add_argument("--results-dir", type=Path, default=Path("results"))
+    parser.add_argument("--split", choices=SPLIT_CHOICES, default="test")
+    parser.add_argument("--splits-path", type=Path)
     parser.add_argument("--test-size", type=int, default=750)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-new-tokens", type=int, default=16)
     parser.add_argument("--dry_run", action="store_true")
+    parser.add_argument(
+        "--gpu-memory-utilization",
+        type=float,
+        default=float(os.environ.get("VLLM_GPU_MEMORY_UTILIZATION", "0.9")),
+        help="Fraction of GPU memory vLLM may reserve.",
+    )
     parser.add_argument("--hf-token", default=os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"))
     return parser.parse_args()
 
@@ -137,13 +151,28 @@ def load_metadata(metadata_path: Path) -> pd.DataFrame:
     if not metadata_path.exists():
         raise FileNotFoundError(f"Metadata file not found: {metadata_path}")
 
-    dataframe = pd.read_csv(metadata_path, dtype={"sample_id": str, "image_path": str, "bug_type": str})
+    dataframe = pd.read_csv(
+        metadata_path,
+        dtype={
+            "sample_id": str,
+            "source_interface_id": str,
+            "viewport": str,
+            "image_path": str,
+            "bug_type": str,
+        },
+    )
     required_columns = {"sample_id", "image_path", "label", "bug_type"}
     missing_columns = required_columns - set(dataframe.columns)
     if missing_columns:
         raise ValueError(f"Metadata is missing required columns: {sorted(missing_columns)}")
 
     dataframe["label"] = pd.to_numeric(dataframe["label"], errors="raise").astype(int)
+    if "source_interface_id" not in dataframe.columns:
+        dataframe["source_interface_id"] = dataframe["sample_id"]
+    dataframe["source_interface_id"] = dataframe["source_interface_id"].fillna(dataframe["sample_id"]).astype(str)
+    if "viewport" not in dataframe.columns:
+        dataframe["viewport"] = "1280x800"
+    dataframe["viewport"] = dataframe["viewport"].fillna("1280x800").astype(str)
     dataframe["bug_type"] = dataframe["bug_type"].apply(normalize_bug_type)
     dataframe["true_class"] = dataframe.apply(derive_true_class, axis=1)
     dataframe["true_label"] = (dataframe["true_class"] != "CLEAN").astype(int)
@@ -194,6 +223,25 @@ def build_test_split(dataframe: pd.DataFrame, test_size: int, seed: int) -> tupl
             if len(test_df) > test_size:
                 test_df = test_df.head(test_size).copy()
             return test_df.reset_index(drop=True), "metadata:test"
+
+    if "source_interface_id" in dataframe.columns:
+        group_key = dataframe["source_interface_id"].fillna(dataframe["sample_id"]).astype(str)
+        unique_sources = sorted(group_key.unique().tolist())
+        rng = random.Random(seed)
+        rng.shuffle(unique_sources)
+        selected_sources: list[str] = []
+        selected_count = 0
+        source_sizes = group_key.value_counts().to_dict()
+        for source_id in unique_sources:
+            selected_sources.append(source_id)
+            selected_count += int(source_sizes.get(source_id, 0))
+            if selected_count >= test_size:
+                break
+        test_df = dataframe.loc[group_key.isin(selected_sources)].copy()
+        test_df = test_df.sort_values(["sample_id", "image_path"], kind="stable")
+        if len(test_df) > test_size:
+            test_df = test_df.head(test_size).copy()
+        return test_df.reset_index(drop=True), "source_interface_id:grouped"
 
     group_sizes = dataframe.groupby("true_class").size().to_dict()
     allocations = _allocate_group_counts(group_sizes, test_size)
@@ -341,7 +389,15 @@ class BaseBackend:
 
 
 class VllmVisionBackend(BaseBackend):
-    def __init__(self, model_name: str, model_id: str, max_new_tokens: int, trust_remote_code: bool, hf_token: str | None = None) -> None:
+    def __init__(
+        self,
+        model_name: str,
+        model_id: str,
+        max_new_tokens: int,
+        trust_remote_code: bool,
+        hf_token: str | None = None,
+        gpu_memory_utilization: float = 0.9,
+    ) -> None:
         super().__init__(model_name=model_name, model_id=model_id, max_new_tokens=max_new_tokens, hf_token=hf_token)
         import torch
         from vllm import LLM, SamplingParams
@@ -366,7 +422,7 @@ class VllmVisionBackend(BaseBackend):
             trust_remote_code=trust_remote_code,
             limit_mm_per_prompt={"image": 1},
             max_num_seqs=1,
-            gpu_memory_utilization=0.9,
+            gpu_memory_utilization=gpu_memory_utilization,
         )
 
     def infer(self, image: Image.Image, prompt: str) -> str:
@@ -490,6 +546,7 @@ def build_backend(args: argparse.Namespace) -> BaseBackend:
             max_new_tokens=args.max_new_tokens,
             trust_remote_code=bool(spec["trust_remote_code"]),
             hf_token=args.hf_token,
+            gpu_memory_utilization=args.gpu_memory_utilization,
         )
     if backend_type == "transformers":
         return LlavaTransformersBackend(
@@ -566,7 +623,18 @@ def run_inference_with_retry(
 def evaluate(args: argparse.Namespace) -> dict[str, Any]:
     logger = setup_logging(args.results_dir)
     metadata = load_metadata(args.metadata_path)
-    test_df, split_strategy = build_test_split(metadata, test_size=args.test_size, seed=args.seed)
+    splits_path = args.splits_path or default_splits_path(args.metadata_path)
+    if getattr(args, "split", "test") in SPLIT_CHOICES:
+        test_df, split_strategy = select_split_dataframe(
+            dataframe=metadata,
+            split=args.split,
+            splits_path=splits_path,
+            seed=args.seed,
+        )
+        if args.split != "all" and len(test_df) > args.test_size:
+            test_df = test_df.head(args.test_size).copy()
+    else:
+        test_df, split_strategy = build_test_split(metadata, test_size=args.test_size, seed=args.seed)
     if args.dry_run:
         test_df = test_df.head(10).copy()
 
@@ -621,6 +689,8 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
                 prediction_rows.append(
                     {
                         "sample_id": row.sample_id,
+                        "source_interface_id": row.source_interface_id,
+                        "viewport": row.viewport,
                         "image_path": row.image_path,
                         "true_class": row.true_class,
                         "true_label": int(row.true_label),

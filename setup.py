@@ -22,6 +22,7 @@ setup(
         "tqdm>=4.66.0",
         "matplotlib>=3.8.0",
         "seaborn>=0.13.0",
+        "python-ternary>=1.0.8",
         "pytest>=8.0.0",
         "pyyaml>=6.0.1",
         "pillow>=10.0.0",
@@ -29,4 +30,3 @@ setup(
         "accelerate>=0.29.0",
     ],
 )
-
