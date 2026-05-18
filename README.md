@@ -22,13 +22,12 @@
 
 ## 2. 다루는 버그 종류
 
-데이터셋 생성 단계에서 아래 5가지 버그를 인위적으로 주입합니다.
+데이터셋 생성 단계에서 아래 4가지 버그를 인위적으로 주입합니다.
 
 - `B1`: Layout Overlap
 - `B2`: Text Overflow
 - `B3`: Z-index Collision
 - `B4`: Truncation
-- `B5`: Color Contrast
 
 모델은 각 스크린샷에 대해 아래 둘 중 하나로 답하도록 평가됩니다.
 
@@ -41,7 +40,36 @@
 - `B2 -> OVERFLOW`
 - `B3 -> ZINDEX`
 - `B4 -> TRUNCATION`
-- `B5 -> CONTRAST`
+
+
+### 2.1. 제외된 버그 종류
+
+초기 proposal에는 `B5 Color Contrast`도 포함되어 있었으나, 다음 이유로 제외했습니다.
+
+- programmatic injection으로는 시각 변화가 매우 작음 (평균 1.9% pixel change, B1-B4는 6-17%)
+- 강화된 버전(luminance shift 키우기, 더 많은 element 처리)에서도 zero-shot VLM 감지 어려움
+- 데이터셋 통계 분석에서 outlier가 되어 평균을 왜곡
+
+### 2.2. Bug 주입의 시각 강도
+
+zero-shot VLM (특히 7B-class)이 감지할 수 있도록 각 bug에 명시적인 visual cue를 추가합니다.
+
+- `B1`: 큰 negative margin + 회전 + 빨간 outline + 페이지에 큰 컬러 박스 두 개 (서로 겹침)
+- `B2`: 매우 좁은 박스 (30-50px) + 긴 텍스트 + 빨간 박스 + 큰 폰트
+- `B3`: 매우 큰 negative top + cyan/magenta 배경 + z-index 999 vs 1
+- `B4`: 매우 좁은 max-width + ellipsis + 페이지에 큰 truncated banner (400x200)
+
+검증된 visual diff (1280x800 viewport 기준).
+
+| Bug | Changed pixels | 7B Baseline Detection |
+|---|---|---|
+| B1 OVERLAP | ~14% | 100% (3/3) |
+| B2 OVERFLOW | ~8% | 100% (3/3) |
+| B3 ZINDEX | ~14% | 0% (0/3) |
+| B4 TRUNCATION | ~16% | 100% binary (3/3, but mislabeled as OVERFLOW) |
+
+B3가 visual diff는 충분하지만 semantic concept이라 zero-shot으로 어렵습니다.
+한계는 §16에서 자세히 다룹니다.
 
 ## 3. GAP이란?
 
@@ -979,7 +1007,68 @@ pytest -q
 - 현재 GAP, Random drop, FastV pruning 평가는 `qwen2vl` 경로를 기준으로 구현되어 있습니다.
 - FocusUI는 공식 repo가 별도로 필요하므로 `evaluate_focusui_stub.py --focusui-repo ...`로 연결합니다.
 
-## 16. 자주 겪는 문제
+## 16. Known Issues & Limitations
+
+이 섹션은 본 프로젝트의 솔직한 한계를 정리합니다. paper 작성 시 limitation으로 명시할 항목들입니다.
+
+### 16.1. Bug 주입의 인위성
+
+§2.2에서 설명한 visual cue 강화는 zero-shot VLM 감지를 가능하게 하지만, 자연스러운 production CSS 버그와는 차이가 있습니다.
+
+- 장점: 7B-class VLM도 detection 가능 → token pruning 효과를 측정할 baseline 확보
+- 단점: 실제 CSS 버그는 보통 더 미묘함 (color shift, sub-pixel misalignment 등)
+
+future work로 다음을 제안할 수 있습니다.
+
+- more naturalistic bug injection (real-world bug DB 활용)
+- frontier model + subtle bug 조합 (GPT-4o, Claude API)
+- context-augmented prompting (Macklon & Bezemer 2025 참고)
+
+### 16.2. Z-index 버그의 본질적 어려움
+
+B3 (Z-index Collision)은 시각적 강화 후에도 zero-shot VLM이 감지하지 못합니다 (0/3). 두 요소가 함께 보이는 시각 신호만으로는 "잘못된 stacking order"라는 semantic 개념을 추론하기 어렵습니다. visual saliency를 넘어선 structural understanding이 필요한 task입니다.
+
+paper에서 이 finding은 그 자체로 가치가 있습니다.
+
+### 16.3. VLM의 GUI Bug Detection 한계
+
+선행연구와 우리 결과가 일관됩니다.
+
+| 모델 | 본 연구 | 선행연구 |
+|---|---|---|
+| Qwen2-VL-7B (FP16) | 0/4 (subtle bug) | - |
+| InternVL2-26B (FP16) | 0/4 (subtle bug, 4 prompt 시도) | - |
+| Qwen-2.5-VL (best open) | - | 70.0% (VideoGameQA-Bench) |
+| GPT-4o | - | 82.8% / 100% with context |
+
+→ Open-source VLM은 zero-shot으로 GUI bug detection이 어렵습니다. frontier model이나 specialized fine-tuning이 필요합니다.
+
+### 16.4. Token Pruning의 catastrophic false positive
+
+GAP/Random 모두 `drop_rate >= 0.3`에서 CLEAN을 모두 BUG로 잘못 분류합니다.
+
+| Method | drop=0.0 CLEAN | drop=0.3 CLEAN | drop=0.5 CLEAN |
+|---|---|---|---|
+| GAP | 100% | 0% | 0% |
+| Random | 100% | 50% | 0% |
+
+token pruning이 모델 confidence를 떨어뜨려 모든 입력을 "뭔가 이상하다 = BUG"로 over-predict하게 만듭니다. paper의 finding으로 중요합니다.
+
+### 16.5. 검증된 환경
+
+- GPU: NVIDIA RTX PRO 6000 Blackwell (sm_120, 96GB VRAM)
+- CUDA: 12.8
+- PyTorch: 2.11.0+cu128
+- Transformers: 5.8.1
+- Models: Qwen/Qwen2-VL-7B-Instruct (FP16), InternVL2-26B (FP16)
+
+알려진 환경 호환성 이슈.
+
+- AWQ 양자화 모델 (Marlin kernel)은 sm_120 미지원 → FP16 사용 필수
+- vLLM flashinfer는 nvcc 필요 → 미설치 시 `VLLM_USE_FLASHINFER_SAMPLER=0`
+- InternVL2는 `pip install timm einops sentencepiece` 필요
+
+## 17. 자주 겪는 문제
 
 ### Hugging Face 다운로드가 이상하게 멈추거나 `416 Range Not Satisfiable`가 발생하는 경우
 
@@ -1009,7 +1098,7 @@ HF_HUB_DISABLE_XET=1 python -m evaluation.evaluate_baseline ...
 - `vLLM`은 별도 엔진 프로세스를 사용합니다.
 - 따라서 일부 측정값은 `transformers` 경로와 다르게 보일 수 있습니다.
 
-## 17. 한 번에 따라 하기
+## 18. 한 번에 따라 하기
 
 아무것도 모르는 상태에서 가장 안전한 실행 순서는 아래입니다.
 
@@ -1031,6 +1120,6 @@ pytest -q
 
 `run_quick_demo.sh`와 `run_all.sh`는 모두 현재 단계가 무엇인지, 결과물이 어디에 저장되는지 로그로 출력하도록 구성되어 있습니다.
 
-## 18. 라이선스 / 참고
+## 19. 라이선스 / 참고
 
 이 저장소는 재현 가능한 연구용 스캐폴드 성격의 프로젝트입니다. 사용한 외부 모델과 데이터셋의 라이선스 및 사용 조건은 각 원본 저장소의 안내를 반드시 확인해야 합니다.
