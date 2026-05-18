@@ -2,13 +2,18 @@
 # 이 파일만 봐도 전체 파이프라인의 기본 동작을 이해할 수 있도록 주석을 붙였습니다.
 
 dataset:
-  # 최종 생성할 총 이미지 수입니다.
-  # 현재 balanced mode 기준으로 아래 값들은 다음을 의미합니다.
-  # clean 2500장 + bug 2500장(버그 타입별 500장) = 총 5000장
-  n_samples: 5000
+  # 최종 생성할 총 rendered image 수입니다.
+  # 기본값은 3개 viewport(mobile/tablet/desktop)를 포함해 약 10K장을 목표로 합니다.
+  n_samples: 10000
+
+  # 쉼표로 구분된 viewport 목록입니다.
+  viewports: "375x667,768x1024,1280x800"
+
+  # Playwright 렌더링 병렬 context 개수입니다.
+  render_concurrency: 4
 
   # balanced mode에서 버그 타입별로 만들 개수입니다.
-  # B1~B5가 있으므로 500 * 5 = 2500 bug 이미지가 생성됩니다.
+  # multi-viewport에서는 rendered image 기준으로 해석하고 내부적으로 source 수로 변환합니다.
   samples_per_bug: 500
 
   # 재현성을 위한 random seed입니다.

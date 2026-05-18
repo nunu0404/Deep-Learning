@@ -56,6 +56,8 @@ mkdir -p "$DATA_DIR" "$RESULTS_DIR" "$FIGURES_DIR" "$TABLES_DIR"
 
 N_SAMPLES="$(config_get dataset.n_samples)"
 SAMPLES_PER_BUG="$(config_get dataset.samples_per_bug)"
+VIEWPORTS="$(config_get dataset.viewports)"
+RENDER_CONCURRENCY="$(config_get dataset.render_concurrency)"
 SEED="$(config_get dataset.seed)"
 ALPHA="$(config_get gap.alpha)"
 BETA="$(config_get gap.beta)"
@@ -81,7 +83,7 @@ echo "Figures dir:     $FIGURES_DIR"
 echo "Tables dir:      $TABLES_DIR"
 echo "HF_XET disabled: $HF_HUB_DISABLE_XET"
 echo
-echo "Dataset target:  total_images=$N_SAMPLES, samples_per_bug=$SAMPLES_PER_BUG, seed=$SEED"
+echo "Dataset target:  total_images=$N_SAMPLES, samples_per_bug=$SAMPLES_PER_BUG, viewports=$VIEWPORTS, seed=$SEED"
 echo "GAP config:      alpha=$ALPHA beta=$BETA gamma=$GAMMA drop_rates=$DROP_RATES"
 echo "Baseline models: $(echo "$MODELS" | tr '\n' ' ' | sed 's/ $//')"
 
@@ -91,6 +93,8 @@ print_section "[1/5] Building Dataset"
 python -m dataset.build_dataset \
   --n_samples "$N_SAMPLES" \
   --samples-per-bug "$SAMPLES_PER_BUG" \
+  --viewports "$VIEWPORTS" \
+  --render-concurrency "$RENDER_CONCURRENCY" \
   --seed "$SEED" \
   --output-dir "$DATA_DIR"
 echo "[done] Dataset build finished. Metadata: $DATA_DIR/metadata.csv"
@@ -102,13 +106,15 @@ for model in $MODELS; do
     --model "$model" \
     --metadata-path "$DATA_DIR/metadata.csv" \
     --results-dir "$RESULTS_DIR/baseline" \
+    --gpu-memory-utilization "${VLLM_GPU_MEMORY_UTILIZATION:-0.9}" \
     --dry_run
 
   echo "[baseline] Full evaluation for model: $model"
   python -m evaluation.evaluate_baseline \
     --model "$model" \
     --metadata-path "$DATA_DIR/metadata.csv" \
-    --results-dir "$RESULTS_DIR/baseline"
+    --results-dir "$RESULTS_DIR/baseline" \
+    --gpu-memory-utilization "${VLLM_GPU_MEMORY_UTILIZATION:-0.9}"
 done
 echo "[done] Baseline evaluations finished."
 
@@ -123,14 +129,26 @@ python -m evaluation.evaluate_gap \
   --gamma "$GAMMA"
 echo "[done] GAP sweep finished."
 
-print_section "[4/5] Analysis"
-if [[ ! -d "$RESULTS_DIR/random" ]]; then
-  echo "[warn] results/random is missing; Pareto plots will omit Random drop." >&2
-fi
-if [[ ! -d "$RESULTS_DIR/fastv" ]]; then
-  echo "[warn] results/fastv is missing; Pareto plots will omit FastV." >&2
-fi
+print_section "[3.5/5] Random Sweep"
+python -m evaluation.evaluate_random \
+  --model qwen2vl \
+  --metadata-csv "$DATA_DIR/metadata.csv" \
+  --output-dir "$RESULTS_DIR/random" \
+  --drop-rates "$DROP_RATES" \
+  --seed "$SEED"
+echo "[done] Random sweep finished."
 
+print_section "[3.6/5] FastV Sweep"
+python -m evaluation.evaluate_fastv \
+  --model qwen2vl \
+  --metadata-csv "$DATA_DIR/metadata.csv" \
+  --output-dir "$RESULTS_DIR/fastv" \
+  --drop-rates "$DROP_RATES" \
+  --seed "$SEED" \
+  --prune-layer "$(config_get gap.prune_after_layer)"
+echo "[done] FastV sweep finished."
+
+print_section "[4/5] Analysis"
 python -m analysis.analyze_results \
   --model-name qwen2vl \
   --metadata-csv "$DATA_DIR/metadata.csv" \
@@ -139,6 +157,7 @@ python -m analysis.analyze_results \
   --baseline-glob "$RESULTS_DIR/baseline/**/*baseline.json" \
   --random-glob "$RESULTS_DIR/random/**/*.json" \
   --fastv-glob "$RESULTS_DIR/fastv/**/*.json" \
+  --focusui-glob "$RESULTS_DIR/focusui/**/*.json" \
   --gap-glob "$RESULTS_DIR/gap/**/*.json" \
   --ablation-glob "$RESULTS_DIR/ablation/**/*.json" \
   --skip-patch-viz

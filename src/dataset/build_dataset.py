@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Build a GUI visual bug dataset from HuggingFaceM4/WebSight.
 
-Default behavior balances the output around the requested target:
-- 2,500 clean screenshots
-- 500 buggy screenshots for each of B1-B5
+Default behavior balances the output around the requested total rendered image
+target across mobile, tablet, and desktop viewports.
 
 Use ``--all-bugs`` to render all five bug variants for every sample instead.
 """
@@ -13,11 +12,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
+import hashlib
 import json
 import logging
 import os
 import random
 import re
+import shutil
 import sys
 import traceback
 from datetime import datetime, timezone
@@ -44,7 +45,18 @@ except ImportError:  # pragma: no cover - script execution fallback
 
 BUG_TYPES = ("B1", "B2", "B3", "B4", "B5")
 BUG_INDEX = {bug_type: index for index, bug_type in enumerate(BUG_TYPES, start=1)}
-METADATA_COLUMNS = ["sample_id", "image_path", "label", "bug_type", "vss_score"]
+DEFAULT_VIEWPORTS = "375x667,768x1024,1280x800"
+DEFAULT_LEGACY_VIEWPORT = "1280x800"
+MIN_FREE_DISK_GB = 60
+METADATA_COLUMNS = [
+    "sample_id",
+    "source_interface_id",
+    "viewport",
+    "image_path",
+    "label",
+    "bug_type",
+    "vss_score",
+]
 TEXT_TAGS = (
     "h1",
     "h2",
@@ -99,8 +111,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--n_samples",
         type=int,
-        default=None,
-        help="Target total image count. In balanced mode this includes clean and buggy images.",
+        default=10_000,
+        help=(
+            "Target total rendered image count across all viewports. "
+            "In balanced mode this includes clean and buggy images."
+        ),
     )
     parser.add_argument(
         "--samples-per-bug",
@@ -113,6 +128,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout-seconds", type=float, default=10.0)
     parser.add_argument("--viewport-width", type=int, default=1280)
     parser.add_argument("--viewport-height", type=int, default=800)
+    parser.add_argument(
+        "--viewports",
+        default=DEFAULT_VIEWPORTS,
+        help="Comma-separated viewport sizes as WxH. Default: mobile, tablet, desktop.",
+    )
+    parser.add_argument(
+        "--render-concurrency",
+        type=int,
+        default=4,
+        help="Number of parallel Playwright contexts used for rendering.",
+    )
     parser.add_argument(
         "--all-bugs",
         action="store_true",
@@ -165,6 +191,42 @@ def sample_id_for(index: int) -> str:
     return f"{index:05d}"
 
 
+def parse_viewport(value: str) -> tuple[int, int]:
+    match = re.fullmatch(r"\s*(\d+)x(\d+)\s*", value)
+    if not match:
+        raise ValueError(f"Invalid viewport {value!r}. Expected WxH, for example 1280x800.")
+    width = int(match.group(1))
+    height = int(match.group(2))
+    if width <= 0 or height <= 0:
+        raise ValueError(f"Invalid viewport {value!r}. Width and height must be positive.")
+    return width, height
+
+
+def parse_viewports(value: str) -> list[tuple[int, int]]:
+    viewports: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for chunk in value.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        viewport = parse_viewport(chunk)
+        if viewport in seen:
+            continue
+        seen.add(viewport)
+        viewports.append(viewport)
+    if not viewports:
+        raise ValueError("--viewports must include at least one WxH pair.")
+    return viewports
+
+
+def format_viewport(viewport: tuple[int, int]) -> str:
+    return f"{viewport[0]}x{viewport[1]}"
+
+
+def source_interface_id_for(html: str) -> str:
+    return hashlib.sha256(html.encode("utf-8")).hexdigest()[:16]
+
+
 def relative_path_str(path: Path) -> str:
     try:
         return path.resolve().relative_to(Path.cwd().resolve()).as_posix()
@@ -215,8 +277,15 @@ def normalize_bug_type(value: str | None) -> str:
     return value
 
 
-def dedupe_metadata(metadata_path: Path) -> set[tuple[str, str]]:
-    seen: set[tuple[str, str]] = set()
+def metadata_key(row: dict[str, Any]) -> tuple[str, str, str]:
+    source_interface_id = str(row.get("source_interface_id") or row.get("sample_id") or "")
+    viewport = str(row.get("viewport") or DEFAULT_LEGACY_VIEWPORT)
+    bug_type = normalize_bug_type(row.get("bug_type"))
+    return source_interface_id, viewport, bug_type
+
+
+def dedupe_metadata(metadata_path: Path) -> set[tuple[str, str, str]]:
+    seen: set[tuple[str, str, str]] = set()
     if not metadata_path.exists():
         return seen
 
@@ -226,7 +295,9 @@ def dedupe_metadata(metadata_path: Path) -> set[tuple[str, str]]:
     with metadata_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
         for row in reader:
-            key = (row["sample_id"], normalize_bug_type(row.get("bug_type")))
+            row.setdefault("source_interface_id", row.get("sample_id", ""))
+            row.setdefault("viewport", DEFAULT_LEGACY_VIEWPORT)
+            key = metadata_key(row)
             if key in seen:
                 duplicate_count += 1
                 continue
@@ -245,11 +316,11 @@ def dedupe_metadata(metadata_path: Path) -> set[tuple[str, str]]:
 def append_metadata_rows(
     metadata_path: Path,
     rows: list[dict[str, Any]],
-    existing_keys: set[tuple[str, str]],
+    existing_keys: set[tuple[str, str, str]],
 ) -> int:
     rows_to_write: list[dict[str, Any]] = []
     for row in rows:
-        key = (row["sample_id"], normalize_bug_type(row["bug_type"]))
+        key = metadata_key(row)
         if key in existing_keys:
             continue
         existing_keys.add(key)
@@ -313,6 +384,9 @@ def write_dataset_stats(metadata_path: Path, stats_path: Path) -> dict[str, Any]
         return stats
 
     dataframe["bug_type"] = dataframe["bug_type"].fillna("None")
+    if "viewport" not in dataframe.columns:
+        dataframe["viewport"] = DEFAULT_LEGACY_VIEWPORT
+    dataframe["viewport"] = dataframe["viewport"].fillna(DEFAULT_LEGACY_VIEWPORT).astype(str)
     dataframe["vss_score"] = pd.to_numeric(dataframe["vss_score"], errors="coerce")
 
     counts = {
@@ -322,6 +396,10 @@ def write_dataset_stats(metadata_path: Path, stats_path: Path) -> dict[str, Any]
     }
     for bug_type in BUG_TYPES:
         counts[bug_type] = int((dataframe["bug_type"] == bug_type).sum())
+    counts["viewports"] = {
+        viewport: int(count)
+        for viewport, count in dataframe["viewport"].value_counts().sort_index().items()
+    }
 
     bug_rows = dataframe[dataframe["label"] == 1]
     vss_overall = numeric_summary(bug_rows["vss_score"].dropna().tolist())
@@ -349,13 +427,27 @@ def write_checkpoint(
         "dataset": args.dataset,
         "split": args.split,
         "max_samples": args.max_samples,
+        "n_samples": args.n_samples,
+        "viewports": [format_viewport(viewport) for viewport in args.parsed_viewports],
         "all_bugs": args.all_bugs,
         "samples_per_bug": args.samples_per_bug,
+        "bug_sources_per_bug": getattr(args, "bug_sources_per_bug", args.samples_per_bug),
+        "render_concurrency": args.render_concurrency,
         "processed_samples": active_processed,
         "remaining_samples": max(args.max_samples - active_processed, 0),
         "counts": stats["counts"],
     }
     checkpoint_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def warn_if_low_disk_space(output_dir: Path, logger: logging.Logger) -> None:
+    usage = shutil.disk_usage(output_dir)
+    free_gb = usage.free / (1024**3)
+    if free_gb < MIN_FREE_DISK_GB:
+        logger.warning(
+            "Output partition has %.1f GB free; the default 10K multi-viewport dataset can require 30-50 GB.",
+            free_gb,
+        )
 
 
 def class_string(tag: Tag) -> str:
@@ -421,7 +513,8 @@ def find_first_colored_text_container(soup: BeautifulSoup, min_length: int = 4) 
 def pick_bug_types_for_sample(index: int, args: argparse.Namespace) -> list[str]:
     if args.all_bugs:
         return list(BUG_TYPES)
-    bug_budget = args.samples_per_bug * len(BUG_TYPES)
+    samples_per_bug = getattr(args, "bug_sources_per_bug", args.samples_per_bug)
+    bug_budget = samples_per_bug * len(BUG_TYPES)
     if index >= bug_budget:
         return []
     return [BUG_TYPES[index % len(BUG_TYPES)]]
@@ -696,7 +789,9 @@ async def render_html(
     html: str,
     output_path: Path,
     timeout_ms: int,
+    viewport: tuple[int, int],
 ) -> None:
+    await page.set_viewport_size({"width": viewport[0], "height": viewport[1]})
     await page.goto("about:blank", wait_until="load", timeout=timeout_ms)
     await page.set_content(html, wait_until="load", timeout=timeout_ms)
     try:
@@ -733,23 +828,28 @@ async def process_sample(
     page: Any,
     args: argparse.Namespace,
     paths: dict[str, Path],
-    metadata_keys: set[tuple[str, str]],
+    metadata_keys: set[tuple[str, str, str]],
     logger: logging.Logger,
+    write_lock: asyncio.Lock | None = None,
 ) -> dict[str, Any]:
     sample_id = sample_id_for(index)
     timeout_ms = int(args.timeout_seconds * 1000)
     rows: list[dict[str, Any]] = []
     errors: list[str] = []
     assigned_bug_types = pick_bug_types_for_sample(index, args)
+    viewport_labels = [format_viewport(viewport) for viewport in args.parsed_viewports]
 
     try:
         clean_html = extract_html(sample)
+        source_interface_id = source_interface_id_for(clean_html)
     except Exception as exc:  # noqa: BLE001
         message = f"{sample_id} | extraction failed | {type(exc).__name__}: {exc}"
         logger.error(message)
         return {
             "index": index,
             "sample_id": sample_id,
+            "source_interface_id": None,
+            "viewports": viewport_labels,
             "assigned_bug_types": assigned_bug_types,
             "clean_rendered": False,
             "rows_written": 0,
@@ -757,48 +857,10 @@ async def process_sample(
             "processed_at": now_iso(),
         }
 
-    clean_html_path = paths["html"] / f"{sample_id}_clean.html"
-    clean_image_path = paths["screenshots"] / f"{sample_id}_clean.png"
-    clean_html_path.write_text(clean_html, encoding="utf-8")
-
-    clean_key = (sample_id, "None")
-    clean_rendered = clean_key in metadata_keys and clean_image_path.exists()
-
-    if not clean_rendered:
-        try:
-            await render_html(page, clean_html, clean_image_path, timeout_ms=timeout_ms)
-            rows.append(
-                {
-                    "sample_id": sample_id,
-                    "image_path": relative_path_str(clean_image_path),
-                    "label": 0,
-                    "bug_type": None,
-                    "vss_score": None,
-                }
-            )
-            clean_rendered = True
-        except (PlaywrightTimeoutError, PlaywrightError, Exception) as exc:  # noqa: BLE001
-            message = f"{sample_id} | clean render failed | {type(exc).__name__}: {exc}"
-            logger.error(message)
-            errors.append(message)
-            return {
-                "index": index,
-                "sample_id": sample_id,
-                "assigned_bug_types": assigned_bug_types,
-                "clean_rendered": False,
-                "rows_written": 0,
-                "errors": errors,
-                "processed_at": now_iso(),
-            }
+    clean_rendered = True
+    injected_by_type: dict[str, str] = {}
 
     for bug_type in assigned_bug_types:
-        bug_html_path = paths["html"] / f"{sample_id}_{bug_type}.html"
-        bug_image_path = paths["screenshots"] / f"{sample_id}_{bug_type}.png"
-        bug_key = (sample_id, bug_type)
-
-        if bug_key in metadata_keys and bug_image_path.exists():
-            continue
-
         rng = rng_for_sample(args.seed, index, bug_type)
         injected_html = BUG_INJECTORS[bug_type](clean_html, rng)
         if not injected_html:
@@ -806,30 +868,78 @@ async def process_sample(
             logger.error(message)
             errors.append(message)
             continue
+        injected_by_type[bug_type] = injected_html
 
-        bug_html_path.write_text(injected_html, encoding="utf-8")
+    for viewport in args.parsed_viewports:
+        viewport_label = format_viewport(viewport)
+        clean_html_path = paths["html"] / f"{sample_id}_{viewport_label}_clean.html"
+        clean_image_path = paths["screenshots"] / f"{sample_id}_{viewport_label}_clean.png"
+        clean_html_path.write_text(clean_html, encoding="utf-8")
 
-        try:
-            await render_html(page, injected_html, bug_image_path, timeout_ms=timeout_ms)
-            vss_score = compute_vss(clean_image_path, bug_image_path)
-            rows.append(
-                {
-                    "sample_id": sample_id,
-                    "image_path": relative_path_str(bug_image_path),
-                    "label": 1,
-                    "bug_type": bug_type,
-                    "vss_score": round(vss_score, 6),
-                }
-            )
-        except (PlaywrightTimeoutError, PlaywrightError, Exception) as exc:  # noqa: BLE001
-            message = f"{sample_id} | {bug_type} render failed | {type(exc).__name__}: {exc}"
-            logger.error(message)
-            errors.append(message)
+        clean_key = (source_interface_id, viewport_label, "None")
+        viewport_clean_rendered = clean_key in metadata_keys and clean_image_path.exists()
 
-    rows_written = append_metadata_rows(paths["metadata"], rows, metadata_keys)
+        if not viewport_clean_rendered:
+            try:
+                await render_html(page, clean_html, clean_image_path, timeout_ms=timeout_ms, viewport=viewport)
+                rows.append(
+                    {
+                        "sample_id": sample_id,
+                        "source_interface_id": source_interface_id,
+                        "viewport": viewport_label,
+                        "image_path": relative_path_str(clean_image_path),
+                        "label": 0,
+                        "bug_type": None,
+                        "vss_score": None,
+                    }
+                )
+                viewport_clean_rendered = True
+            except (PlaywrightTimeoutError, PlaywrightError, Exception) as exc:  # noqa: BLE001
+                clean_rendered = False
+                message = f"{sample_id} | {viewport_label} clean render failed | {type(exc).__name__}: {exc}"
+                logger.error(message)
+                errors.append(message)
+                continue
+
+        for bug_type, injected_html in injected_by_type.items():
+            bug_html_path = paths["html"] / f"{sample_id}_{viewport_label}_{bug_type}.html"
+            bug_image_path = paths["screenshots"] / f"{sample_id}_{viewport_label}_{bug_type}.png"
+            bug_key = (source_interface_id, viewport_label, bug_type)
+
+            if bug_key in metadata_keys and bug_image_path.exists():
+                continue
+
+            bug_html_path.write_text(injected_html, encoding="utf-8")
+
+            try:
+                await render_html(page, injected_html, bug_image_path, timeout_ms=timeout_ms, viewport=viewport)
+                vss_score = compute_vss(clean_image_path, bug_image_path)
+                rows.append(
+                    {
+                        "sample_id": sample_id,
+                        "source_interface_id": source_interface_id,
+                        "viewport": viewport_label,
+                        "image_path": relative_path_str(bug_image_path),
+                        "label": 1,
+                        "bug_type": bug_type,
+                        "vss_score": round(vss_score, 6),
+                    }
+                )
+            except (PlaywrightTimeoutError, PlaywrightError, Exception) as exc:  # noqa: BLE001
+                message = f"{sample_id} | {viewport_label} {bug_type} render failed | {type(exc).__name__}: {exc}"
+                logger.error(message)
+                errors.append(message)
+
+    if write_lock is None:
+        rows_written = append_metadata_rows(paths["metadata"], rows, metadata_keys)
+    else:
+        async with write_lock:
+            rows_written = append_metadata_rows(paths["metadata"], rows, metadata_keys)
     return {
         "index": index,
         "sample_id": sample_id,
+        "source_interface_id": source_interface_id,
+        "viewports": viewport_labels,
         "assigned_bug_types": assigned_bug_types,
         "clean_rendered": clean_rendered,
         "rows_written": rows_written,
@@ -841,6 +951,7 @@ async def process_sample(
 async def build_dataset(args: argparse.Namespace) -> None:
     paths = ensure_output_dirs(args.output_dir)
     logger = setup_logging(paths["logs"])
+    warn_if_low_disk_space(paths["output"], logger)
     processed_indices = load_processed_indices(paths["status"])
     metadata_keys = dedupe_metadata(paths["metadata"])
 
@@ -849,80 +960,108 @@ async def build_dataset(args: argparse.Namespace) -> None:
 
     dataset_stream = load_dataset(args.dataset, split=args.split, streaming=True)
     dataset_iterator = iter(dataset_stream)
+    samples_to_process: list[tuple[int, dict[str, Any]]] = []
+    try:
+        for index in range(args.max_samples):
+            try:
+                sample = next(dataset_iterator)
+            except StopIteration:
+                break
+            if index in processed_indices:
+                continue
+            samples_to_process.append((index, sample))
+    finally:
+        close_iterator = getattr(dataset_iterator, "close", None)
+        if callable(close_iterator):
+            close_iterator()
 
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=True)
-        context = await browser.new_context(
-            viewport={"width": args.viewport_width, "height": args.viewport_height},
-            device_scale_factor=1,
-        )
-        page = await context.new_page()
+        queue: asyncio.Queue[tuple[int, dict[str, Any]] | None] = asyncio.Queue()
+        for item in samples_to_process:
+            queue.put_nowait(item)
+        worker_count = max(1, min(args.render_concurrency, len(samples_to_process) or 1))
+        for _ in range(worker_count):
+            queue.put_nowait(None)
 
-        processed_since_checkpoint = 0
+        write_lock = asyncio.Lock()
+        checkpoint_state = {"processed_since_checkpoint": 0}
+
+        async def worker(worker_id: int) -> None:
+            first_viewport = args.parsed_viewports[0]
+            context = await browser.new_context(
+                viewport={"width": first_viewport[0], "height": first_viewport[1]},
+                device_scale_factor=1,
+            )
+            page = await context.new_page()
+            try:
+                while True:
+                    item = await queue.get()
+                    if item is None:
+                        queue.task_done()
+                        break
+
+                    index, sample = item
+                    status_payload = await process_sample(
+                        sample=sample,
+                        index=index,
+                        page=page,
+                        args=args,
+                        paths=paths,
+                        metadata_keys=metadata_keys,
+                        logger=logger,
+                        write_lock=write_lock,
+                    )
+                    async with write_lock:
+                        append_status(paths["status"], status_payload)
+                        processed_indices.add(index)
+                        checkpoint_state["processed_since_checkpoint"] += 1
+                        if checkpoint_state["processed_since_checkpoint"] >= 100:
+                            stats = write_dataset_stats(paths["metadata"], paths["stats"])
+                            write_checkpoint(paths["checkpoint"], args, processed_indices, stats)
+                            checkpoint_state["processed_since_checkpoint"] = 0
+                    progress.update(1)
+                    queue.task_done()
+            finally:
+                await page.close()
+                await context.close()
+
         try:
-            for index in range(args.max_samples):
-                try:
-                    sample = next(dataset_iterator)
-                except StopIteration:
-                    break
-
-                if index in processed_indices:
-                    continue
-
-                status_payload = await process_sample(
-                    sample=sample,
-                    index=index,
-                    page=page,
-                    args=args,
-                    paths=paths,
-                    metadata_keys=metadata_keys,
-                    logger=logger,
-                )
-                append_status(paths["status"], status_payload)
-                processed_indices.add(index)
-                processed_since_checkpoint += 1
-                progress.update(1)
-
-                if processed_since_checkpoint >= 100:
-                    stats = write_dataset_stats(paths["metadata"], paths["stats"])
-                    write_checkpoint(paths["checkpoint"], args, processed_indices, stats)
-                    processed_since_checkpoint = 0
-
+            await asyncio.gather(*(worker(worker_id) for worker_id in range(worker_count)))
             stats = write_dataset_stats(paths["metadata"], paths["stats"])
             write_checkpoint(paths["checkpoint"], args, processed_indices, stats)
         finally:
-            await page.close()
-            await context.close()
             await browser.close()
-            close_iterator = getattr(dataset_iterator, "close", None)
-            if callable(close_iterator):
-                close_iterator()
             progress.close()
 
 
 def validate_args(args: argparse.Namespace) -> None:
+    args.parsed_viewports = parse_viewports(args.viewports)
+    viewport_count = len(args.parsed_viewports)
+
     if args.n_samples is not None:
         if args.n_samples <= 0:
             raise ValueError("--n_samples must be positive.")
+        target_source_versions = max(1, int(np.ceil(args.n_samples / viewport_count)))
         if args.all_bugs:
-            args.max_samples = max(1, args.n_samples // (len(BUG_TYPES) + 1))
+            args.max_samples = max(1, int(np.ceil(target_source_versions / (len(BUG_TYPES) + 1))))
+            args.bug_sources_per_bug = args.max_samples
         else:
-            bug_total = args.samples_per_bug * len(BUG_TYPES)
-            clean_total = args.n_samples - bug_total
-            if clean_total <= 0:
-                raise ValueError(
-                    "--n_samples is too small for the requested balanced bug budget. "
-                    "Increase --n_samples or lower --samples-per-bug."
-                )
-            args.max_samples = clean_total
+            args.bug_sources_per_bug = max(1, int(np.ceil(args.samples_per_bug / viewport_count)))
+            bug_source_total = args.bug_sources_per_bug * len(BUG_TYPES)
+            args.max_samples = max(bug_source_total, target_source_versions - bug_source_total)
+    else:
+        args.bug_sources_per_bug = args.samples_per_bug
 
     if args.max_samples <= 0:
         raise ValueError("--max-samples must be positive.")
     if args.samples_per_bug <= 0:
         raise ValueError("--samples-per-bug must be positive.")
-    if not args.all_bugs and args.samples_per_bug * len(BUG_TYPES) > args.max_samples:
+    if args.render_concurrency <= 0:
+        raise ValueError("--render-concurrency must be positive.")
+    if not args.all_bugs and args.bug_sources_per_bug * len(BUG_TYPES) > args.max_samples:
         raise ValueError(
-            "--samples-per-bug * 5 exceeds --max-samples. "
+            "The derived per-bug source budget exceeds --max-samples. "
             "Use a smaller balanced target or pass --all-bugs."
         )
 

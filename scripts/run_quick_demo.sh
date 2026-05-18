@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PYTHONPATH="$ROOT_DIR/src:${PYTHONPATH:-}"
 export HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}"
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 
 DEMO_DIR="${DEMO_DIR:-$ROOT_DIR/demo_artifacts}"
 DATA_DIR="$DEMO_DIR/data"
@@ -28,6 +29,7 @@ echo "Results dir:     $RESULTS_DIR"
 echo "Figures dir:     $FIGURES_DIR"
 echo "Tables dir:      $TABLES_DIR"
 echo "HF_XET disabled: $HF_HUB_DISABLE_XET"
+echo "CUDA devices:    $CUDA_VISIBLE_DEVICES"
 echo
 echo "Demo target:     total_images=10, samples_per_bug=1, seed=42"
 echo "Models used:     qwen2vl only"
@@ -36,6 +38,8 @@ print_section "[1/4] Building Demo Dataset"
 python -m dataset.build_dataset \
   --n_samples 10 \
   --samples-per-bug 1 \
+  --viewports "1280x800" \
+  --render-concurrency 1 \
   --seed 42 \
   --output-dir "$DATA_DIR"
 echo "[done] Demo dataset build finished. Metadata: $DATA_DIR/metadata.csv"
@@ -45,6 +49,7 @@ python -m evaluation.evaluate_baseline \
   --model qwen2vl \
   --metadata-path "$DATA_DIR/metadata.csv" \
   --results-dir "$RESULTS_DIR/baseline" \
+  --gpu-memory-utilization "${VLLM_GPU_MEMORY_UTILIZATION:-0.4}" \
   --dry_run
 echo "[done] Baseline dry run finished."
 
@@ -67,6 +72,7 @@ python -m analysis.analyze_results \
   --gap-glob "$RESULTS_DIR/gap/**/*.json" \
   --random-glob "$RESULTS_DIR/random/**/*.json" \
   --fastv-glob "$RESULTS_DIR/fastv/**/*.json" \
+  --focusui-glob "$RESULTS_DIR/focusui/**/*.json" \
   --ablation-glob "$RESULTS_DIR/ablation/**/*.json" \
   --skip-patch-viz
 echo "[done] Figure and table generation finished."

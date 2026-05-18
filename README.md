@@ -11,7 +11,7 @@
 
 이 프로젝트는 크게 4단계로 구성됩니다.
 
-1. 웹 UI HTML을 수집하고, 인위적으로 시각 버그를 주입해 `GUI-BugBench` 형태의 데이터셋을 만듭니다.
+1. 웹 UI HTML을 수집하고, mobile/tablet/desktop 3개 viewport에서 인위적으로 시각 버그를 주입해 `GUI-BugBench` 형태의 데이터셋을 만듭니다.
 2. 여러 VLM이 이 버그를 얼마나 잘 맞추는지 baseline 성능을 측정합니다.
 3. `GAP`으로 비전 토큰 일부를 제거한 뒤, 성능 저하 없이 계산량을 줄일 수 있는지 평가합니다.
 4. 결과를 논문용 Figure / Table 형태로 정리합니다.
@@ -64,11 +64,28 @@
 - FLOPs 감소
 - GUI 버그 탐지 성능 최대한 유지
 
+## 3.5. GAP은 FocusUI/FastV와 무엇이 다른가?
+
+| Axis | FocusUI | GAP (ours) |
+|---|---|---|
+| Task | UI grounding (instruction -> bbox) | Bug-type classification (K+1-way) |
+| Training requirement | Patch-level supervision required | **Fully training-free** |
+| Instruction dependency | Requires instruction embedding | **Instruction-free** (CI/CD friendly) |
+| Signals | Instruction-cond. score + UI-graph score | Attention + (1-entropy) + edge density |
+| Position handling | PosPad strategy | Plain index selection + CLS preservation |
+| Evaluation focus | ScreenSpot-Pro, retention vs. accuracy | **Bug-type collapse-point sensitivity** |
+
+FastV는 language decoder layer의 text-to-image attention으로 pruning token을 고르는 text-conditional baseline입니다. FocusUI도 instruction embedding과 UI grounding target을 전제로 하기 때문에, instruction이 없는 CI/CD screenshot regression 상황과는 전제가 다릅니다.
+
+GAP은 inference 시점에 별도 instruction이나 bbox supervision 없이 screenshot과 VLM 내부 신호만 사용합니다. 그래서 자동 UI 테스트에서 캡처된 screenshot을 바로 `CLEAN` 또는 `BUG: <type>`으로 분류하고, drop rate가 올라갈 때 어떤 bug type이 먼저 무너지는지 분석하는 데 초점을 둡니다. 더 자세한 비교는 `docs/RELATED_WORK.md`에 정리되어 있습니다.
+
 ## 4. 프로젝트 구조
 
 ```text
 gap-gui-bug/
 ├── README.md
+├── docs/
+│   └── RELATED_WORK.md
 ├── requirements.txt
 ├── environment.yml
 ├── setup.py
@@ -86,7 +103,10 @@ gap-gui-bug/
 │   │   └── vlm_wrapper.py
 │   ├── evaluation/
 │   │   ├── evaluate_baseline.py
-│   │   └── evaluate_gap.py
+│   │   ├── evaluate_gap.py
+│   │   ├── evaluate_random.py
+│   │   ├── evaluate_fastv.py
+│   │   └── evaluate_focusui_stub.py
 │   └── analysis/
 │       └── analyze_results.py
 └── tests/
@@ -144,7 +164,7 @@ Baseline 평가에서 아래 모델을 지원합니다.
 
 - VRAM 24GB 이상
 - 여유 있는 디스크 공간
-  모델 캐시, 데이터셋, 결과물까지 고려하면 수십 GB 이상이 필요할 수 있습니다.
+  기본 10K multi-viewport 데이터셋은 PNG 크기에 따라 약 30-50GB가 필요할 수 있습니다.
 
 주의:
 
@@ -231,8 +251,12 @@ cd gap-gui-bug
    - `internvl`
 5. GAP 평가
    - 현재 `qwen2vl` 기준 drop-rate sweep
-6. 결과 분석
-7. stdout 요약 표 출력
+6. Random drop 평가
+   - 균일 무작위 vision token pruning sweep
+7. FastV 평가
+   - decoder layer의 text-to-image attention 기반 pruning sweep
+8. 결과 분석
+9. stdout 요약 표 출력
 
 기본 출력 경로는 아래입니다.
 
@@ -320,8 +344,10 @@ export PYTHONPATH="$PWD/src:${PYTHONPATH:-}"
 export HF_HUB_DISABLE_XET=1
 
 python -m dataset.build_dataset \
-  --n_samples 5000 \
+  --n_samples 10000 \
   --samples-per-bug 500 \
+  --viewports "375x667,768x1024,1280x800" \
+  --render-concurrency 4 \
   --seed 42 \
   --output-dir /shared/gap-gui-bug/data_v1
 ```
@@ -485,6 +511,74 @@ python -m evaluation.evaluate_gap \
   --gamma 0.0
 ```
 
+#### RQ5. FocusUI 대비 비교
+
+질문:
+
+`instruction-conditioned UI grounding pruning인 FocusUI와, instruction-free bug classification pruning인 GAP은 CI/CD bug detection에서 어떻게 다른가?`
+
+FocusUI 공식 코드는 별도 저장소로 관리되므로, 먼저 해당 repo를 로컬에 clone한 뒤 adapter stub에 경로를 넘깁니다.
+
+```bash
+git clone https://github.com/showlab/FocusUI /shared/FocusUI
+```
+
+```bash
+python -m evaluation.evaluate_focusui_stub \
+  --focusui-repo /shared/FocusUI \
+  --model qwen2vl \
+  --metadata-csv /shared/gap-gui-bug/data_v1/metadata.csv \
+  --output-dir /shared/gap-gui-bug/results/focusui \
+  --drop-rates "0.0,0.3,0.5" \
+  --prune-layer 2
+```
+
+FocusUI repo를 아직 준비하지 않은 상태에서는 아래 명령이 명확한 skip message만 출력합니다.
+
+```bash
+python -m evaluation.evaluate_focusui_stub
+```
+
+#### RQ6. 어떤 `(alpha, beta, gamma)`가 가장 좋은가?
+
+질문:
+
+`GAP의 attention / 1-entropy / edge density 가중치는 validation set에서 어떻게 선택되는가?`
+
+이 실험은 `data/splits.json`을 생성하거나 재사용해 같은 `source_interface`가 train / val / test에 동시에 들어가지 않도록 고정 split을 사용합니다. 기본 검색은 `alpha + beta + gamma = 1` simplex 위에서 0.1 간격 coarse grid를 돌리고, 필요하면 `--fine`으로 0.05 간격 grid를 실행합니다.
+
+```bash
+python -m analysis.hyperparam_search \
+  --metadata-csv /shared/gap-gui-bug/data_v1/metadata.csv \
+  --results-dir /shared/gap-gui-bug/results/hyperparam_search \
+  --figures-dir /shared/gap-gui-bug/final_figures \
+  --tables-dir /shared/gap-gui-bug/final_tables \
+  --drop-rate 0.5 \
+  --budget-images 200
+```
+
+산출물:
+
+- `results/hyperparam_search/grid_results.csv`
+- `results/hyperparam_search/per_bug_best.csv`
+- `figures/abg_simplex.pdf`
+- `figures/abg_pareto.pdf`
+- `tables/abg_top10.tex`
+- `tables/main_results.tex`에 validation-tuned GAP test row 추가
+
+#### RQ7. GAP은 viewport에 robust한가?
+
+질문:
+
+`mobile / tablet / desktop viewport가 바뀌어도 GAP의 bug detection 성능이 유지되는가?`
+
+분석 단계에서 운영 drop rate의 prediction CSV를 모아 viewport별 accuracy / macro F1을 집계합니다.
+
+산출물:
+
+- `tables/per_viewport_results.tex`
+- `figures/viewport_robustness.pdf`
+
 ### 10-6. 어떤 스크립트를 팀원에게 맡겨야 하나
 
 팀 분산 실험에서는 `run_all.sh`보다 개별 명령 실행 방식을 권장합니다.
@@ -546,6 +640,7 @@ python -m analysis.analyze_results \
   --gap-glob "/shared/gap-gui-bug/results/rq2/gap/**/*.json" \
   --random-glob "/shared/gap-gui-bug/results/random/**/*.json" \
   --fastv-glob "/shared/gap-gui-bug/results/fastv/**/*.json" \
+  --focusui-glob "/shared/gap-gui-bug/results/focusui/**/*.json" \
   --ablation-glob "/shared/gap-gui-bug/results/ablation/**/*.json" \
   --skip-patch-viz
 ```
@@ -561,9 +656,10 @@ python -m analysis.analyze_results \
 
 ### 10-10. 현재 구현 범위 기준 주의 사항
 
-- `Random drop` 생성기는 아직 자동 구현되어 있지 않습니다.
-- `FastV` 생성기도 아직 자동 구현되어 있지 않습니다.
-- 따라서 현재 팀 분산 실험은 우선 `Baseline + GAP + Ablation` 중심으로 운영하는 것이 현실적입니다.
+- `Random drop`과 `FastV` 결과 생성기가 포함되어 있어 4-way 비교를 바로 생성할 수 있습니다.
+- Random drop은 같은 `sample_id`, `drop_rate`, `seed` 조합에서 항상 같은 token selection을 사용합니다.
+- FastV는 decoder layer의 text-to-image attention을 사용하는 text-conditional baseline입니다.
+- GAP은 image patch 자체의 attention / entropy / edge density를 쓰는 text-agnostic 방법입니다.
 
 ## 11. 설정 파일
 
@@ -594,17 +690,20 @@ python -m analysis.analyze_results \
 
 ```bash
 python -m dataset.build_dataset \
-  --n_samples 5000 \
+  --n_samples 10000 \
   --samples-per-bug 500 \
+  --viewports "375x667,768x1024,1280x800" \
+  --render-concurrency 4 \
   --seed 42 \
   --output-dir data
 ```
 
 이 설정은 아래 의미입니다.
 
-- clean 2500장
-- bug 2500장
-- 버그 타입별 500장
+- 총 렌더 target 약 10000장
+- mobile / tablet / desktop 3개 viewport
+- 버그 타입별 약 500 rendered image
+- metadata에는 `source_interface_id`, `viewport` 컬럼이 포함됨
 
 생성 결과:
 
@@ -671,6 +770,74 @@ HF_HUB_DISABLE_XET=1 python -m evaluation.evaluate_gap \
 - `results/gap/qwen2vl_dr0.5_predictions.csv`
 - `results/gap/errors.log`
 
+### 11-3a. Random drop 평가
+
+Random drop은 같은 `sample_id`, `drop_rate`, `seed`에 대해 항상 동일한 무작위 keep index를 선택합니다. GAP과 같은 출력 스키마를 사용하므로 분석 스크립트가 그대로 읽을 수 있습니다.
+
+```bash
+HF_HUB_DISABLE_XET=1 python -m evaluation.evaluate_random \
+  --model qwen2vl \
+  --metadata-csv data/metadata.csv \
+  --output-dir results/random \
+  --drop-rates "0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9" \
+  --seed 42
+```
+
+예시: dry run
+
+```bash
+HF_HUB_DISABLE_XET=1 python -m evaluation.evaluate_random \
+  --model qwen2vl \
+  --metadata-csv data/metadata.csv \
+  --output-dir results/random \
+  --drop-rates "0.0,0.5" \
+  --seed 42 \
+  --dry-run
+```
+
+출력:
+
+- `results/random/qwen2vl_dr0.0.json`
+- `results/random/qwen2vl_dr0.0_predictions.csv`
+- `results/random/qwen2vl_dr0.5.json`
+- `results/random/qwen2vl_dr0.5_predictions.csv`
+- `results/random/errors.log`
+
+### 11-3b. FastV 평가
+
+FastV는 GAP과 달리 text-conditional baseline입니다. 기본값은 FastV 논문 설정에 맞춰 decoder layer `K=2`의 text query token이 image key token에 주는 attention을 평균해 patch token을 정렬합니다.
+
+```bash
+HF_HUB_DISABLE_XET=1 python -m evaluation.evaluate_fastv \
+  --model qwen2vl \
+  --metadata-csv data/metadata.csv \
+  --output-dir results/fastv \
+  --drop-rates "0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9" \
+  --seed 42 \
+  --prune-layer 2
+```
+
+예시: dry run
+
+```bash
+HF_HUB_DISABLE_XET=1 python -m evaluation.evaluate_fastv \
+  --model qwen2vl \
+  --metadata-csv data/metadata.csv \
+  --output-dir results/fastv \
+  --drop-rates "0.0,0.5" \
+  --seed 42 \
+  --prune-layer 2 \
+  --dry-run
+```
+
+출력:
+
+- `results/fastv/qwen2vl_dr0.0.json`
+- `results/fastv/qwen2vl_dr0.0_predictions.csv`
+- `results/fastv/qwen2vl_dr0.5.json`
+- `results/fastv/qwen2vl_dr0.5_predictions.csv`
+- `results/fastv/errors.log`
+
 ### 11-4. 분석 및 Figure / Table 생성
 
 ```bash
@@ -683,6 +850,7 @@ python -m analysis.analyze_results \
   --gap-glob "results/gap/**/*.json" \
   --random-glob "results/random/**/*.json" \
   --fastv-glob "results/fastv/**/*.json" \
+  --focusui-glob "results/focusui/**/*.json" \
   --ablation-glob "results/ablation/**/*.json" \
   --skip-patch-viz
 ```
@@ -694,8 +862,49 @@ python -m analysis.analyze_results \
 - `figures/sensitivity_curves.pdf`
 - `figures/sensitivity_curves.png`
 - `figures/vss_correlation.pdf`
+- `figures/viewport_robustness.pdf`
 - `tables/main_results.tex`
+- `tables/per_viewport_results.tex`
 - `tables/ablation.tex`
+
+### 11-5. Hyperparameter search
+
+GAP 기본값 `(alpha=0.4, beta=0.3, gamma=0.3)`을 임의 선택으로 두지 않기 위해 validation set에서 grid search를 실행할 수 있습니다. split은 `data/splits.json`에 저장되어 이후 모든 실험에서 재사용됩니다.
+
+```bash
+HF_HUB_DISABLE_XET=1 python -m analysis.hyperparam_search \
+  --model qwen2vl \
+  --metadata-csv data/metadata.csv \
+  --results-dir results/hyperparam_search \
+  --figures-dir figures \
+  --tables-dir tables \
+  --drop-rate 0.5 \
+  --budget-images 200
+```
+
+더 촘촘한 grid가 필요하면:
+
+```bash
+HF_HUB_DISABLE_XET=1 python -m analysis.hyperparam_search \
+  --model qwen2vl \
+  --metadata-csv data/metadata.csv \
+  --results-dir results/hyperparam_search_fine \
+  --figures-dir figures \
+  --tables-dir tables \
+  --drop-rate 0.5 \
+  --budget-images 200 \
+  --fine
+```
+
+출력:
+
+- `results/hyperparam_search/grid_results.csv`
+- `results/hyperparam_search/per_bug_best.csv`
+- `results/hyperparam_search/summary.json`
+- `figures/abg_simplex.pdf`
+- `figures/abg_pareto.pdf`
+- `tables/abg_top10.tex`
+- best validation config의 test-set 평가 row가 `tables/main_results.tex`에 추가됨
 
 ## 13. 주요 산출물 설명
 
@@ -706,6 +915,8 @@ python -m analysis.analyze_results \
 주요 컬럼:
 
 - `sample_id`
+- `source_interface_id`
+- `viewport`
 - `image_path`
 - `label`
   - `0 = clean`
@@ -755,15 +966,18 @@ pytest -q
 - clean / buggy가 충분히 다른 시각 구조를 가지는지
 - GAP pruner가 지정된 비율만큼 token을 제거하는지
 - `CLS` 토큰을 유지하는지
+- Random drop이 같은 조건에서 deterministic keep index를 생성하는지
+- FastV attention ranking이 deterministic top-k를 선택하는지
 
 ## 15. 현재 구현 상태에서 알아둘 점
 
-이 프로젝트는 데이터 생성, baseline 평가, GAP 평가, 분석까지 전체 흐름이 실행되도록 구성되어 있습니다. 다만 아래는 미리 알고 시작하는 것이 좋습니다.
+이 프로젝트는 데이터 생성, baseline 평가, GAP 평가, Random drop 평가, FastV 평가, FocusUI adapter stub, 분석까지 전체 흐름이 실행되도록 구성되어 있습니다.
 
-- `Random drop` 결과 생성기는 아직 자동 구현되어 있지 않습니다.
-- `FastV` 결과 생성기도 아직 자동 구현되어 있지 않습니다.
-- 분석 스크립트는 `results/random`과 `results/fastv`가 있으면 함께 읽어 그래프에 포함합니다.
-- 즉, 논문용 4-way 비교를 완전히 채우려면 해당 결과를 외부에서 추가로 준비해야 합니다.
+- `run_all.sh`는 `results/baseline`, `results/gap`, `results/random`, `results/fastv`를 모두 생성합니다.
+- 분석 스크립트는 `results/focusui`가 있으면 FocusUI도 함께 읽어 Pareto curve와 main result table에 반영합니다.
+- 기본 데이터셋 생성은 3개 viewport와 약 10K rendered image를 목표로 하며, 출력 파티션의 여유 공간이 60GB 미만이면 경고합니다.
+- 현재 GAP, Random drop, FastV pruning 평가는 `qwen2vl` 경로를 기준으로 구현되어 있습니다.
+- FocusUI는 공식 repo가 별도로 필요하므로 `evaluate_focusui_stub.py --focusui-repo ...`로 연결합니다.
 
 ## 16. 자주 겪는 문제
 

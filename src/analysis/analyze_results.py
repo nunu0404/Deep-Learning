@@ -20,10 +20,10 @@ from PIL import Image
 from scipy.stats import pearsonr, ttest_rel
 
 try:
-    from evaluation.evaluate_baseline import load_metadata
+    from evaluation.evaluate_baseline import compute_metrics, load_metadata
     from models.gap_pruning import GAPPruner, align_signal, extract_grid_thw, normalize_zero_one
 except ImportError:  # pragma: no cover - package-relative execution fallback
-    from ..evaluation.evaluate_baseline import load_metadata
+    from ..evaluation.evaluate_baseline import compute_metrics, load_metadata
     from ..models.gap_pruning import GAPPruner, align_signal, extract_grid_thw, normalize_zero_one
 
 
@@ -41,6 +41,7 @@ METHOD_COLORS = {
     "baseline": COLORBLIND[7],
     "random": COLORBLIND[1],
     "fastv": COLORBLIND[0],
+    "focusui": COLORBLIND[4],
     "gap": COLORBLIND[2],
 }
 BUG_CODE_TO_CLASS = {
@@ -62,6 +63,7 @@ METHOD_DISPLAY = {
     "baseline": "No pruning",
     "random": "Random drop",
     "fastv": "FastV",
+    "focusui": "FocusUI",
     "gap": "GAP (ours)",
 }
 LABELS = ["CLEAN", "OVERLAP", "OVERFLOW", "ZINDEX", "TRUNCATION", "CONTRAST"]
@@ -94,6 +96,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--baseline-glob", default="results/**/*baseline.json")
     parser.add_argument("--random-glob", default="results/random/**/*.json")
     parser.add_argument("--fastv-glob", default="results/fastv/**/*.json")
+    parser.add_argument("--focusui-glob", default="results/focusui/**/*.json")
     parser.add_argument("--gap-glob", default="results/gap/**/*.json")
     parser.add_argument("--ablation-glob", default="results/ablation/**/*.json")
     parser.add_argument("--recommended-drop-rate", type=float)
@@ -160,6 +163,8 @@ def infer_method(path: Path, explicit: str | None = None) -> str:
     if explicit:
         return explicit
     lowered = str(path).lower()
+    if "focusui" in lowered:
+        return "focusui"
     if "fastv" in lowered:
         return "fastv"
     if "random" in lowered:
@@ -175,7 +180,7 @@ def extract_drop_rate(payload: dict[str, Any], path: Path, default: float = 0.0)
     if "drop_rate" in payload:
         return float(payload["drop_rate"])
 
-    for section_name in ("gap", "fastv", "random"):
+    for section_name in ("gap", "focusui", "fastv", "random"):
         section = payload.get(section_name)
         if isinstance(section, dict) and "drop_rate" in section:
             return float(section["drop_rate"])
@@ -262,6 +267,7 @@ def plot_pareto_curve(
     baseline_run: ResultRun,
     random_runs: list[ResultRun],
     fastv_runs: list[ResultRun],
+    focusui_runs: list[ResultRun],
     gap_runs: list[ResultRun],
     gap_threshold: ResultRun | None,
     figures_dir: Path,
@@ -281,6 +287,7 @@ def plot_pareto_curve(
     for method_key, runs, linestyle in (
         ("random", random_runs, "--"),
         ("fastv", fastv_runs, "-."),
+        ("focusui", focusui_runs, ":"),
         ("gap", gap_runs, "-"),
     ):
         if not runs:
@@ -410,6 +417,9 @@ def load_predictions(run: ResultRun) -> pd.DataFrame:
     if run.predictions_csv is None or not run.predictions_csv.exists():
         raise FileNotFoundError(f"Predictions CSV missing for {run.label}: {run.predictions_csv}")
     dataframe = pd.read_csv(run.predictions_csv)
+    if "viewport" not in dataframe.columns:
+        dataframe["viewport"] = "1280x800"
+    dataframe["viewport"] = dataframe["viewport"].fillna("1280x800").astype(str)
     dataframe["sample_key"] = dataframe["sample_id"].astype(str) + "::" + dataframe["image_path"].astype(str)
     return dataframe
 
@@ -475,10 +485,11 @@ def write_main_results_table(
     baseline_run: ResultRun | None,
     random_run: ResultRun | None,
     fastv_run: ResultRun | None,
+    focusui_run: ResultRun | None,
     gap_run: ResultRun | None,
     output_path: Path,
 ) -> None:
-    rows = [run for run in [baseline_run, random_run, fastv_run, gap_run] if run is not None]
+    rows = [run for run in [baseline_run, random_run, fastv_run, focusui_run, gap_run] if run is not None]
     if not rows:
         output_path.write_text("% No rows available for main results table.\n", encoding="utf-8")
         return
@@ -526,6 +537,98 @@ def write_main_results_table(
     lines.extend([r"\bottomrule", r"\end{tabular}", ""])
     ensure_parent(output_path)
     output_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def viewport_metrics_for_run(run: ResultRun) -> list[dict[str, Any]]:
+    predictions = load_predictions(run)
+    rows: list[dict[str, Any]] = []
+    for viewport, group in predictions.groupby("viewport", sort=True):
+        metrics = compute_metrics(
+            true_classes=group["true_class"].astype(str).tolist(),
+            predicted_classes=group["predicted_class"].astype(str).tolist(),
+        )
+        rows.append(
+            {
+                "method": run.method,
+                "label": run.label,
+                "viewport": str(viewport),
+                "num_samples": int(len(group)),
+                "accuracy": float(metrics.get("accuracy", 0.0)),
+                "f1_macro": float(metrics.get("macro", {}).get("f1", 0.0)),
+            }
+        )
+    return rows
+
+
+def write_per_viewport_results_table(runs: list[ResultRun | None], output_path: Path) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for run in runs:
+        if run is None:
+            continue
+        try:
+            rows.extend(viewport_metrics_for_run(run))
+        except FileNotFoundError:
+            continue
+
+    dataframe = pd.DataFrame(rows)
+    if dataframe.empty:
+        output_path.write_text("% No per-viewport rows available.\n", encoding="utf-8")
+        return dataframe
+
+    lines = [
+        r"\begin{tabular}{llccc}",
+        r"\toprule",
+        r"Method & Viewport & N & Accuracy & F1-macro \\",
+        r"\midrule",
+    ]
+    for row in dataframe.itertuples(index=False):
+        lines.append(
+            " & ".join(
+                [
+                    latex_escape(row.label),
+                    latex_escape(row.viewport),
+                    str(int(row.num_samples)),
+                    format_metric(float(row.accuracy), 3),
+                    format_metric(float(row.f1_macro), 3),
+                ]
+            )
+            + r" \\"
+        )
+    lines.extend([r"\bottomrule", r"\end{tabular}", ""])
+    ensure_parent(output_path)
+    output_path.write_text("\n".join(lines), encoding="utf-8")
+    return dataframe
+
+
+def plot_viewport_robustness(gap_run: ResultRun | None, figures_dir: Path, logger: logging.Logger) -> None:
+    if gap_run is None:
+        logger.warning("Skipping viewport robustness plot because no GAP run is available.")
+        return
+    try:
+        dataframe = pd.DataFrame(viewport_metrics_for_run(gap_run))
+    except FileNotFoundError as exc:
+        logger.warning("Skipping viewport robustness plot: %s", exc)
+        return
+    if dataframe.empty:
+        logger.warning("Skipping viewport robustness plot because no viewport rows are available.")
+        return
+
+    plt = ensure_plotting_backend()
+    fig, ax = plt.subplots(figsize=(5.5, 3.5))
+    ax.bar(
+        dataframe["viewport"].astype(str),
+        dataframe["f1_macro"].astype(float),
+        color=METHOD_COLORS["gap"],
+        alpha=0.85,
+    )
+    ax.set_xlabel("Viewport")
+    ax.set_ylabel("F1-macro")
+    ax.set_title("GAP robustness across viewports")
+    ax.set_ylim(0.0, 1.0)
+    ax.grid(True, axis="y", alpha=0.25)
+    save_figure(fig, figures_dir / "viewport_robustness.pdf")
+    save_figure(fig, figures_dir / "viewport_robustness.png")
+    plt.close(fig)
 
 
 def derive_ablation_label(run: ResultRun) -> str:
@@ -884,6 +987,7 @@ def main() -> None:
     baseline_runs = load_result_runs(args.baseline_glob, method="baseline", model_name=args.model_name, logger=logger)
     random_runs = load_result_runs(args.random_glob, method="random", model_name=args.model_name, logger=logger)
     fastv_runs = load_result_runs(args.fastv_glob, method="fastv", model_name=args.model_name, logger=logger)
+    focusui_runs = load_result_runs(args.focusui_glob, method="focusui", model_name=args.model_name, logger=logger)
     gap_runs = load_result_runs(args.gap_glob, method="gap", model_name=args.model_name, logger=logger)
 
     baseline_run = baseline_runs[0] if baseline_runs else None
@@ -901,6 +1005,7 @@ def main() -> None:
         baseline_run=baseline_run,
         random_runs=random_runs,
         fastv_runs=fastv_runs,
+        focusui_runs=focusui_runs,
         gap_runs=gap_runs,
         gap_threshold=gap_threshold,
         figures_dir=figures_dir,
@@ -915,15 +1020,22 @@ def main() -> None:
 
     random_operating_run = select_nearest_run(random_runs, recommended_drop_rate)
     fastv_operating_run = select_nearest_run(fastv_runs, recommended_drop_rate)
+    focusui_operating_run = select_nearest_run(focusui_runs, recommended_drop_rate)
     gap_operating_run = select_nearest_run(gap_runs, recommended_drop_rate)
 
     write_main_results_table(
         baseline_run=baseline_run,
         random_run=random_operating_run,
         fastv_run=fastv_operating_run,
+        focusui_run=focusui_operating_run,
         gap_run=gap_operating_run,
         output_path=tables_dir / "main_results.tex",
     )
+    write_per_viewport_results_table(
+        runs=[baseline_run, random_operating_run, fastv_operating_run, focusui_operating_run, gap_operating_run],
+        output_path=tables_dir / "per_viewport_results.tex",
+    )
+    plot_viewport_robustness(gap_run=gap_operating_run, figures_dir=figures_dir, logger=logger)
 
     ablation_drop_rate = args.ablation_drop_rate if args.ablation_drop_rate is not None else recommended_drop_rate
     ablation_runs = collect_ablation_runs(
