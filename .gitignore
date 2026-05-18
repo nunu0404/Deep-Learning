@@ -3,6 +3,7 @@ __pycache__/
 *.so
 *.egg-info/
 .pytest_cache/
+.vendor/
 demo_artifacts/
 data/
 results/
@@ -11,3 +12,17 @@ tables/
 .env
 .DS_Store
 .github/workflows/
+
+# Backup files
+*.bak
+*.before_*
+*.layer2_bak
+
+# Runtime logs
+*.log
+demo_artifacts/data/checkpoint.json
+demo_artifacts/data/sample_status.jsonl
+demo_artifacts/data/render_errors.log
+
+# Vendor deps
+.vendor/

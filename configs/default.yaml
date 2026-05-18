@@ -4,7 +4,7 @@
 dataset:
   # 최종 생성할 총 rendered image 수입니다.
   # 기본값은 3개 viewport(mobile/tablet/desktop)를 포함해 약 10K장을 목표로 합니다.
-  n_samples: 10000
+  n_samples: 8000
 
   # 쉼표로 구분된 viewport 목록입니다.
   viewports: "375x667,768x1024,1280x800"
@@ -14,7 +14,7 @@ dataset:
 
   # balanced mode에서 버그 타입별로 만들 개수입니다.
   # multi-viewport에서는 rendered image 기준으로 해석하고 내부적으로 source 수로 변환합니다.
-  samples_per_bug: 500
+  samples_per_bug: 1000
 
   # 재현성을 위한 random seed입니다.
   seed: 42
